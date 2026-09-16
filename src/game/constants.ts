@@ -6,8 +6,34 @@
  * world pixels / seconds and never needs to know about device pixel ratio.
  */
 
-export const VIEW_W = 1280
-export const VIEW_H = 720
+/**
+ * The internal world is authored at a fixed resolution, but which one is
+ * mutable: this is a side-scroller that fundamentally needs some minimum
+ * horizontal lookahead to plan a swing, so it can't just adopt a phone's
+ * native (very narrow) portrait aspect without breaking that. Instead it
+ * switches between two hand-tuned presets — see applyOrientation() below,
+ * called from GameCanvas whenever the viewport's orientation changes.
+ * Landscape (phones sideways, tablets, desktop) keeps the original wide
+ * frame; portrait gets a taller, narrower one so a phone held upright fills
+ * the screen without the huge top/bottom letterbox bars 16:9 would force.
+ *
+ * `let`, not `const`: every other module imports these by name, and ES
+ * module bindings are live, so reassigning them here updates every reader
+ * everywhere without threading a parameter through the whole render/engine
+ * pipeline.
+ */
+export let VIEW_W = 1280
+export let VIEW_H = 720
+
+const LANDSCAPE_VIEW = { w: 1280, h: 720 }
+const PORTRAIT_VIEW = { w: 960, h: 1500 }
+
+/** Switch the world's dimensions to suit the device's current orientation. */
+export function applyOrientation(isPortrait: boolean) {
+  const preset = isPortrait ? PORTRAIT_VIEW : LANDSCAPE_VIEW
+  VIEW_W = preset.w
+  VIEW_H = preset.h
+}
 
 /** Underside of the mossy canopy — every swing anchor lives near this line. */
 export const CEILING_Y = 96
@@ -34,8 +60,12 @@ export const PLAYER_START_X = 220
 export const PLAYER_START_Y = QUARTER_DOWN_Y
 export const PLAYER_START_VX = 360
 
-/** Camera keeps the hamster this far from the left edge. */
-export const CAMERA_ANCHOR_X = 400
+/** Camera keeps the hamster this far from the left edge. Tuned to leave a
+ *  comfortable lookahead margin beyond HOOK_RANGE_AHEAD in the narrower
+ *  portrait frame (960 - 320 = 640px ahead, well past the 470px hook
+ *  range) while working just as well — even more generously — in the
+ *  wider landscape frame. */
+export const CAMERA_ANCHOR_X = 320
 export const CAMERA_LERP = 7.5
 
 // ---------------------------------------------------------------------------

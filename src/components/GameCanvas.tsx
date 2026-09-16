@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { GameEngine } from '../game/engine'
+import { applyOrientation } from '../game/constants'
 import { render } from '../game/render'
 import { clearGradientCache } from '../game/render/background'
 
@@ -38,6 +39,9 @@ export default function GameCanvas({ engine, inputEnabled }: Props) {
       dpr = Math.min(window.devicePixelRatio || 1, 2)
       const w = Math.max(1, Math.floor(parent.clientWidth))
       const h = Math.max(1, Math.floor(parent.clientHeight))
+      // Swap the internal world's aspect ratio to match — see the doc
+      // comment on VIEW_W/VIEW_H for why this doesn't disturb gameplay.
+      applyOrientation(h > w)
       width = Math.floor(w * dpr)
       height = Math.floor(h * dpr)
       canvas.width = width
