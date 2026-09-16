@@ -7,37 +7,86 @@
  */
 
 /**
- * The internal world is authored at a fixed resolution, but which one is
- * mutable: this is a side-scroller that fundamentally needs some minimum
- * horizontal lookahead to plan a swing, so it can't just adopt a phone's
- * native (very narrow) portrait aspect without breaking that. Instead it
- * switches between two hand-tuned presets — see applyOrientation() below,
- * called from GameCanvas whenever the viewport's orientation changes.
- * Landscape (phones sideways, tablets, desktop) keeps the original wide
- * frame; portrait gets a taller, narrower one so a phone held upright fills
- * the screen without the huge top/bottom letterbox bars 16:9 would force.
+ * Orientation switch — the "focus region" design
+ * -----------------------------------------------------------------------
+ * The vertical geometry (canopy, swing band, grass) never changes: VIEW_H,
+ * CEILING_Y and GROUND_Y below are the same fixed numbers regardless of
+ * device. What changes for a phone held upright is only the horizontal
+ * *focus region* — how much world, left-to-right, the camera keeps in
+ * view — because this is a side-scroller that needs some minimum
+ * lookahead to plan a swing, and a phone's native portrait width would
+ * leave none.
+ *
+ * Every constant below that is purely horizontal (never a radial/rope
+ * quantity, never anything vertical) scales by the same HORIZONTAL_SCALE
+ * factor as VIEW_W, so the *proportions* — how far you can see past the
+ * hook's own reach, how densely lanterns and monsters are spaced — stay
+ * identical to landscape. Only the physical distance shrinks to fit.
+ * applyOrientation(), called from GameCanvas whenever the viewport's
+ * orientation changes, is the one place that recomputes all of them.
  *
  * `let`, not `const`: every other module imports these by name, and ES
  * module bindings are live, so reassigning them here updates every reader
  * everywhere without threading a parameter through the whole render/engine
  * pipeline.
  */
-export let VIEW_W = 1280
-export let VIEW_H = 720
+const LANDSCAPE_VIEW_W = 1280
+const PORTRAIT_VIEW_W = 500
+const PORTRAIT_SCALE = PORTRAIT_VIEW_W / LANDSCAPE_VIEW_W
 
-const LANDSCAPE_VIEW = { w: 1280, h: 720 }
-const PORTRAIT_VIEW = { w: 960, h: 1500 }
+const BASE_CAMERA_ANCHOR_X = 400
+const BASE_HOOK_RANGE_AHEAD = 470
+const BASE_HOOK_RANGE_BEHIND = 90
+const BASE_CHUNK_WIDTH = 900
+const BASE_PX_PER_METER = 40
+const BASE_PLAYER_START_X = 220
+const BASE_PLAYER_START_VX = 360
+const BASE_RELEASE_BOOST_X = 68
+const BASE_HURT_KNOCKBACK_VX = -150
 
-/** Switch the world's dimensions to suit the device's current orientation. */
+export let VIEW_W = LANDSCAPE_VIEW_W
+/** World height in pixels — fixed in every orientation; see the note above. */
+export const VIEW_H = 720
+
+export let HORIZONTAL_SCALE = 1
+/** Camera keeps the hamster this far from the left edge. */
+export let CAMERA_ANCHOR_X = BASE_CAMERA_ANCHOR_X
+/** How far ahead of the hamster we will look for a lantern to grab. */
+export let HOOK_RANGE_AHEAD = BASE_HOOK_RANGE_AHEAD
+export let HOOK_RANGE_BEHIND = BASE_HOOK_RANGE_BEHIND
+/** Width of one procedurally generated slice of forest. */
+export let CHUNK_WIDTH = BASE_CHUNK_WIDTH
+/** World pixels per in-game metre, used for the distance readout + speedometer. */
+export let PX_PER_METER = BASE_PX_PER_METER
+export let PLAYER_START_X = BASE_PLAYER_START_X
+export let PLAYER_START_VX = BASE_PLAYER_START_VX
+/** Extra launch impulse applied on release. The vertical part is an instant
+ *  "pop"; the horizontal part is spread over RELEASE_ASSIST_TIME instead of
+ *  snapping instantly, so a release feels like a smooth accelerating launch
+ *  rather than a sudden jump in speed. */
+export let RELEASE_BOOST_X = BASE_RELEASE_BOOST_X
+export let HURT_KNOCKBACK_VX = BASE_HURT_KNOCKBACK_VX
+
+/** Switch the world's horizontal focus region to suit the device's current
+ *  orientation. Nothing vertical is touched — see the note above. */
 export function applyOrientation(isPortrait: boolean) {
-  const preset = isPortrait ? PORTRAIT_VIEW : LANDSCAPE_VIEW
-  VIEW_W = preset.w
-  VIEW_H = preset.h
+  HORIZONTAL_SCALE = isPortrait ? PORTRAIT_SCALE : 1
+  VIEW_W = isPortrait ? PORTRAIT_VIEW_W : LANDSCAPE_VIEW_W
+  CAMERA_ANCHOR_X = BASE_CAMERA_ANCHOR_X * HORIZONTAL_SCALE
+  HOOK_RANGE_AHEAD = BASE_HOOK_RANGE_AHEAD * HORIZONTAL_SCALE
+  HOOK_RANGE_BEHIND = BASE_HOOK_RANGE_BEHIND * HORIZONTAL_SCALE
+  CHUNK_WIDTH = BASE_CHUNK_WIDTH * HORIZONTAL_SCALE
+  PX_PER_METER = BASE_PX_PER_METER * HORIZONTAL_SCALE
+  PLAYER_START_X = BASE_PLAYER_START_X * HORIZONTAL_SCALE
+  PLAYER_START_VX = BASE_PLAYER_START_VX * HORIZONTAL_SCALE
+  RELEASE_BOOST_X = BASE_RELEASE_BOOST_X * HORIZONTAL_SCALE
+  HURT_KNOCKBACK_VX = BASE_HURT_KNOCKBACK_VX * HORIZONTAL_SCALE
 }
 
-/** Underside of the mossy canopy — every swing anchor lives near this line. */
+/** Underside of the mossy canopy — every swing anchor lives near this line.
+ *  Fixed in every orientation — see the note above. */
 export const CEILING_Y = 96
-/** Top of the grass. Touching it costs a heart. */
+/** Top of the grass. Touching it costs a heart. Fixed in every orientation. */
 export const GROUND_Y = 622
 /** A quarter of the way down from the canopy to the grass — used to place
  *  both the hamster's starting height and the apex of the ground-bounce
@@ -45,47 +94,29 @@ export const GROUND_Y = 622
  *  places. */
 const QUARTER_DOWN_Y = CEILING_Y + (GROUND_Y - CEILING_Y) * 0.25
 
-/** World pixels per in-game metre, used for the distance readout + speedometer. */
-export const PX_PER_METER = 40
-
 export const GRAVITY = 1560
 /** Horizontal drag while flying, as a per-second multiplier. */
 export const AIR_DRAG = 0.13
 export const MAX_SPEED = 1500
 
 export const PLAYER_RADIUS = 27
-export const PLAYER_START_X = 220
 /** Starts high, a quarter of the way down from the canopy — plenty of room
  *  to fall into the first swing instead of starting low and cramped. */
 export const PLAYER_START_Y = QUARTER_DOWN_Y
-export const PLAYER_START_VX = 360
 
-/** Camera keeps the hamster this far from the left edge. Tuned to leave a
- *  comfortable lookahead margin beyond HOOK_RANGE_AHEAD in the narrower
- *  portrait frame (960 - 320 = 640px ahead, well past the 470px hook
- *  range) while working just as well — even more generously — in the
- *  wider landscape frame. */
-export const CAMERA_ANCHOR_X = 320
 export const CAMERA_LERP = 7.5
 
 // ---------------------------------------------------------------------------
 // Hook / swing
 // ---------------------------------------------------------------------------
 
-/** How far ahead of the hamster we will look for a lantern to grab. */
-export const HOOK_RANGE_AHEAD = 470
-export const HOOK_RANGE_BEHIND = 90
 export const HOOK_MAX_LENGTH = 520
 export const HOOK_MIN_LENGTH = 90
-/** Speed the rope tip travels while the hook is still flying to its anchor. */
+/** Speed the rope tip travels while the hook is still flying to its anchor.
+ *  Radial, like the rope's own length — not scaled by orientation. */
 export const HOOK_TRAVEL_SPEED = 3400
 /** Rope shortens slightly while held — that is what builds swing speed. */
 export const ROPE_REEL_SPEED = 46
-/** Extra launch impulse applied on release. The vertical part is an instant
- *  "pop"; the horizontal part is spread over RELEASE_ASSIST_TIME instead of
- *  snapping instantly, so a release feels like a smooth accelerating launch
- *  rather than a sudden jump in speed. */
-export const RELEASE_BOOST_X = 68
 export const RELEASE_BOOST_Y = 150
 /** How long the post-release horizontal thrust takes to fully apply. */
 export const RELEASE_ASSIST_TIME = 0.4
@@ -103,7 +134,6 @@ export const PHYSICS_SUBSTEPS = 4
 export const MAX_HEARTS = 3
 export const IFRAME_DURATION = 1.6
 export const HURT_KNOCKBACK_VY = -260
-export const HURT_KNOCKBACK_VX = -150
 /** Emergency spring cushion when the hamster hits the grass with hearts to
  *  spare. Deliberately dramatic — it pops all the way back up to
  *  QUARTER_DOWN_Y, the same height the hamster starts at, so there is a
@@ -211,8 +241,6 @@ export function tierForDistance(meters: number): Tier {
   return tier
 }
 
-/** Width of one procedurally generated slice of forest. */
-export const CHUNK_WIDTH = 900
 /** Keep this many chunks of world built ahead of the camera. */
 export const CHUNKS_AHEAD = 4
 

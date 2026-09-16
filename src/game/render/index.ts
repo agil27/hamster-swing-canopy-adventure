@@ -103,8 +103,6 @@ export function render(ctx: CanvasRenderingContext2D, engine: GameEngine, vp: Vi
   engine.particles.draw(ctx, camX, camY)
 
   // --- full-screen effects -------------------------------------------------
-  drawSpeedLines(ctx, engine)
-
   if (engine.flash > 0.01) {
     ctx.save()
     ctx.globalAlpha = clamp(engine.flash, 0, 0.75)
@@ -115,31 +113,6 @@ export function render(ctx: CanvasRenderingContext2D, engine: GameEngine, vp: Vi
 
   drawVignette(ctx, gloom, engine.invincibleTime > 0)
 
-  ctx.restore()
-}
-
-/** Motion streaks that kick in once the hamster is really moving. */
-function drawSpeedLines(ctx: CanvasRenderingContext2D, engine: GameEngine) {
-  const kmh = engine.speedKmh
-  if (kmh < 55) return
-  const intensity = clamp((kmh - 55) / 75, 0, 1)
-
-  ctx.save()
-  ctx.globalAlpha = intensity * 0.5
-  ctx.strokeStyle = 'rgba(255,255,255,0.75)'
-  ctx.lineCap = 'round'
-  const count = Math.floor(6 + intensity * 12)
-  for (let i = 0; i < count; i++) {
-    const seed = (engine.time * 260 + i * 97) % 1000
-    const y = (seed * 1.37) % VIEW_H
-    const len = 60 + ((seed * 3.1) % 180) * intensity
-    const x = VIEW_W - ((engine.time * (700 + intensity * 900) + i * 211) % (VIEW_W + 300))
-    ctx.lineWidth = 1.5 + ((seed % 3) * 0.8)
-    ctx.beginPath()
-    ctx.moveTo(x, y)
-    ctx.lineTo(x + len, y)
-    ctx.stroke()
-  }
   ctx.restore()
 }
 

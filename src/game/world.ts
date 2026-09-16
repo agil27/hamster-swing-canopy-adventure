@@ -3,6 +3,7 @@ import {
   CHUNKS_AHEAD,
   CHUNK_WIDTH,
   GROUND_Y,
+  HORIZONTAL_SCALE,
   MONSTER_RAMP_METERS,
   PX_PER_METER,
   TIERS,
@@ -126,8 +127,11 @@ export class World {
     const monsters: Monster[] = []
 
     // --- Canopy lanterns -----------------------------------------------------
-    // The runway opens with a tight, forgiving ladder of anchors.
-    const [gapMin, gapMax] = tier.anchorGap
+    // The runway opens with a tight, forgiving ladder of anchors. Gaps scale
+    // with the horizontal focus region so lanterns feel just as densely
+    // spaced, relative to what's visible, in the narrower portrait frame.
+    const gapMin = tier.anchorGap[0] * HORIZONTAL_SCALE
+    const gapMax = tier.anchorGap[1] * HORIZONTAL_SCALE
     let x = startX + (index === 0 ? 150 : rng.range(40, 120))
     while (x < endX) {
       const wobble = tier.id === 0 ? rng.range(10, 46) : rng.range(8, 120)
@@ -232,7 +236,7 @@ export class World {
   }
 
   private makeMonster(kind: MonsterKind, x: number, phase: number, tierId: number): Monster {
-    const speedScale = 1 + tierId * 0.16
+    const speedScale = (1 + tierId * 0.16) * HORIZONTAL_SCALE
     switch (kind) {
       case 'slime':
         return {

@@ -17,6 +17,7 @@ import {
   HIGH_SCORE_KEY,
   HITSTOP_DURATION,
   HITSTOP_SCALE,
+  HORIZONTAL_SCALE,
   HOOK_MAX_LENGTH,
   HOOK_MIN_LENGTH,
   HOOK_RANGE_AHEAD,
@@ -105,6 +106,15 @@ function ratingFor(kmh: number) {
   for (const [limit, label] of SPEED_RATINGS) if (kmh < limit) return label
   return 'LEGENDARY!'
 }
+
+/** Sunday-strip callouts for a stomp — [word, colour], picked at random. */
+const STOMP_WORDS: Array<[string, string]> = [
+  ['POW!', '#ffd166'],
+  ['BAM!', '#ff8f3f'],
+  ['BONK!', '#ff6b9d'],
+  ['SPLAT!', '#8bf59a'],
+  ['WHAP!', '#5ec8ff'],
+]
 
 function readHighScore() {
   try {
@@ -722,28 +732,31 @@ export class GameEngine {
             }
             m.squash = Math.max(0, m.squash - dt * 2.2)
             m.x += m.vx * m.dir * dt
-            if (Math.abs(m.x - m.homeX) > 95) {
+            const slimeRange = 95 * HORIZONTAL_SCALE
+            if (Math.abs(m.x - m.homeX) > slimeRange) {
               m.dir = m.x > m.homeX ? -1 : 1
-              m.x = m.homeX + Math.sign(m.x - m.homeX) * 95
+              m.x = m.homeX + Math.sign(m.x - m.homeX) * slimeRange
             }
             break
           }
           case 'bat': {
             // Sinusoidal air patrol.
             m.x += m.vx * dt
-            if (Math.abs(m.x - m.homeX) > 165) {
+            const batRange = 165 * HORIZONTAL_SCALE
+            if (Math.abs(m.x - m.homeX) > batRange) {
               m.vx = -m.vx
               m.dir = m.vx >= 0 ? 1 : -1
-              m.x = m.homeX + Math.sign(m.x - m.homeX) * 165
+              m.x = m.homeX + Math.sign(m.x - m.homeX) * batRange
             }
             m.y = m.homeY + Math.sin(m.phase * 2.1 + m.homeX * 0.01) * 56
             break
           }
           case 'hedgehog': {
             m.x += m.vx * m.dir * dt
-            if (Math.abs(m.x - m.homeX) > 150) {
+            const hedgehogRange = 150 * HORIZONTAL_SCALE
+            if (Math.abs(m.x - m.homeX) > hedgehogRange) {
               m.dir = m.x > m.homeX ? -1 : 1
-              m.x = m.homeX + Math.sign(m.x - m.homeX) * 150
+              m.x = m.homeX + Math.sign(m.x - m.homeX) * hedgehogRange
             }
             m.y = m.homeY - Math.abs(Math.sin(m.phase * 8)) * 5
             break
@@ -881,7 +894,9 @@ export class GameEngine {
     this.particles.impactStars(m.x, m.y - 10, 13, '#ffd166')
     this.particles.dustPuff(m.x, m.y + 8, 14, 'rgba(255,250,235,0.9)', 280)
     this.particles.ring(m.x, m.y, 'rgba(255,255,255,0.85)', 24, 3.6, 0.4)
-    this.particles.popup(m.x, m.y - 46, `+${gained}`, '#ffd166', true, 30)
+    const [word, wordColor] = STOMP_WORDS[Math.floor(Math.random() * STOMP_WORDS.length)]
+    this.particles.comicPop(m.x, m.y - 78, word, wordColor)
+    this.particles.popup(m.x, m.y - 34, `+${gained}`, '#ffd166', true, 26)
     this.shake = Math.max(this.shake, 16)
     audio.stomp()
     this.publishHud(true)

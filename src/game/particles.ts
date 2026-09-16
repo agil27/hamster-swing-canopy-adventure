@@ -9,6 +9,7 @@ export type ParticleKind =
   | 'ring'
   | 'text'
   | 'petal'
+  | 'comic'
 
 export interface Particle {
   kind: ParticleKind
@@ -56,6 +57,23 @@ export function sparklePath(ctx: CanvasRenderingContext2D, r: number) {
   ctx.quadraticCurveTo(w, w, 0, r)
   ctx.quadraticCurveTo(-w, w, -r, 0)
   ctx.quadraticCurveTo(-w, -w, 0, -r)
+  ctx.closePath()
+}
+
+/** Jagged American-comic "impact burst" — the explosion shape behind a
+ *  POW!/BAM! callout. Deliberately irregular (unlike starPath's clean
+ *  five points) so it reads as a hand-drawn ink burst, not a sticker. */
+export function comicBurstPath(ctx: CanvasRenderingContext2D, r: number) {
+  const spikes = [1, 0.5, 0.82, 0.42, 1.08, 0.46, 0.78, 0.4, 1, 0.52, 0.9, 0.38, 1.1, 0.48, 0.8, 0.44]
+  ctx.beginPath()
+  for (let i = 0; i < spikes.length; i++) {
+    const a = (i / spikes.length) * TWO_PI - Math.PI / 2
+    const rad = r * spikes[i]
+    const x = Math.cos(a) * rad
+    const y = Math.sin(a) * rad
+    if (i === 0) ctx.moveTo(x, y)
+    else ctx.lineTo(x, y)
+  }
   ctx.closePath()
 }
 
@@ -243,6 +261,28 @@ export class ParticleSystem {
     })
   }
 
+  /** American-comic-style impact callout — "POW!", "SPLAT!" — a jagged ink
+   *  burst behind bold slanted lettering, punching in hard and gone fast. */
+  comicPop(x: number, y: number, text: string, color = '#ffd166') {
+    this.push({
+      kind: 'comic',
+      x,
+      y,
+      vx: 0,
+      vy: -36,
+      life: 0,
+      maxLife: 0.6,
+      size: 38,
+      rot: (Math.random() - 0.5) * 0.16,
+      vrot: 0,
+      color,
+      gravity: -30,
+      drag: 2.4,
+      text,
+      bold: true,
+    })
+  }
+
   /** Drifting petals/spores used for ambience near the player. */
   petal(x: number, y: number, color: string) {
     this.push({
@@ -393,6 +433,35 @@ export class ParticleSystem {
           grad.addColorStop(0, '#ffffff')
           grad.addColorStop(1, p.color)
           ctx.fillStyle = grad
+          ctx.fillText(p.text!, 0, 0)
+          break
+        }
+        case 'comic': {
+          // Punches in fast with a little overshoot, then settles — the
+          // classic comic-panel "POW!" pop.
+          const pop = t < 0.18 ? 0.35 + (t / 0.18) * 0.95 : 1.3 - ((t - 0.18) / 0.82) * 0.3
+          ctx.rotate(p.rot)
+          ctx.scale(pop, pop)
+
+          // Jagged ink burst behind the lettering.
+          const burstR = p.size * 1.55
+          ctx.fillStyle = p.color
+          ctx.strokeStyle = 'rgba(28,14,8,0.95)'
+          ctx.lineWidth = 4
+          comicBurstPath(ctx, burstR)
+          ctx.fill()
+          ctx.stroke()
+
+          // Bold slanted comic lettering, Sunday-strip style.
+          ctx.rotate(-0.09)
+          ctx.font = `400 ${p.size}px "Bangers", "Baloo 2", system-ui, sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.lineJoin = 'round'
+          ctx.lineWidth = 6
+          ctx.strokeStyle = 'rgba(20,10,4,0.95)'
+          ctx.strokeText(p.text!, 0, 0)
+          ctx.fillStyle = '#fff8e6'
           ctx.fillText(p.text!, 0, 0)
           break
         }
