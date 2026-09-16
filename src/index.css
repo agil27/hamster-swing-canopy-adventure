@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: #14331f;
+    font-family: 'Nunito', ui-rounded, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    overscroll-behavior: none;
+  }
+
+  canvas {
+    display: block;
+    touch-action: none;
+  }
+}
+
+@layer components {
+  /* Chunky storybook text with a warm ink outline — used across the HUD. */
+  .text-storybook {
+    text-shadow:
+      0 2px 0 rgba(66, 34, 18, 0.55),
+      0 4px 10px rgba(30, 16, 8, 0.35);
+  }
+
+  .panel-wood {
+    background: linear-gradient(170deg, rgba(255, 249, 235, 0.96), rgba(255, 234, 201, 0.93));
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.9),
+      inset 0 -3px 0 rgba(180, 122, 66, 0.25),
+      0 18px 40px -12px rgba(38, 22, 10, 0.55);
+  }
+
+  .btn-candy {
+    @apply relative select-none rounded-2xl px-6 py-3 font-display text-lg font-extrabold tracking-wide text-white transition active:translate-y-[3px];
+    background: linear-gradient(180deg, #7ed957 0%, #47a94a 55%, #35893c 100%);
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.55),
+      inset 0 -4px 0 rgba(0, 0, 0, 0.18),
+      0 6px 0 #26662d,
+      0 12px 22px -6px rgba(0, 0, 0, 0.5);
+  }
+
+  .btn-candy:active {
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.45),
+      inset 0 -3px 0 rgba(0, 0, 0, 0.2),
+      0 3px 0 #26662d,
+      0 6px 14px -6px rgba(0, 0, 0, 0.5);
+  }
+
+  .btn-candy-amber {
+    background: linear-gradient(180deg, #ffd98a 0%, #f7b23f 55%, #e0932a 100%);
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.6),
+      inset 0 -4px 0 rgba(0, 0, 0, 0.15),
+      0 6px 0 #b9761f,
+      0 12px 22px -6px rgba(0, 0, 0, 0.45);
+  }
+
+  .btn-candy-amber:active {
+    box-shadow:
+      inset 0 2px 0 rgba(255, 255, 255, 0.5),
+      inset 0 -3px 0 rgba(0, 0, 0, 0.16),
+      0 3px 0 #b9761f,
+      0 6px 14px -6px rgba(0, 0, 0, 0.45);
+  }
+
+  .hud-chip {
+    @apply flex items-center gap-2 rounded-2xl px-3 py-1.5 font-display font-bold text-white;
+    background: linear-gradient(180deg, rgba(38, 74, 45, 0.78), rgba(20, 45, 26, 0.82));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      0 6px 16px -8px rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(6px);
+  }
+}
+
+/* Respect users who prefer less motion: calm the decorative loops only. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-soft,
+  .animate-heart-beat,
+  .animate-shimmer,
+  .animate-badge-glow {
+    animation: none !important;
+  }
+}
