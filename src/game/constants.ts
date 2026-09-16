@@ -29,10 +29,24 @@
  * module bindings are live, so reassigning them here updates every reader
  * everywhere without threading a parameter through the whole render/engine
  * pipeline.
+ *
+ * On top of that pure geometric rescale, portrait also gets a deliberate
+ * *mobile ease*: pace (SPEED_EASE) and monster density (DENSITY_EASE) drop
+ * a further notch below what the geometry alone would give, because a
+ * proportionally-identical difficulty still plays harder on a touchscreen
+ * than a mouse/keyboard — less precise input, a thumb instead of a
+ * pointer. Pure spatial layout (camera anchor, hook range, chunk width,
+ * anchor gaps) stays exactly proportional; only speed and density get the
+ * extra forgiveness.
  */
 const LANDSCAPE_VIEW_W = 1280
 const PORTRAIT_VIEW_W = 500
 const PORTRAIT_SCALE = PORTRAIT_VIEW_W / LANDSCAPE_VIEW_W
+
+/** Extra slowdown on top of the geometric scale, mobile only. */
+const PORTRAIT_SPEED_EASE = 0.85
+/** Extra cut to monster density, mobile only. */
+const PORTRAIT_DENSITY_EASE = 0.7
 
 const BASE_CAMERA_ANCHOR_X = 400
 const BASE_HOOK_RANGE_AHEAD = 470
@@ -43,12 +57,17 @@ const BASE_PLAYER_START_X = 220
 const BASE_PLAYER_START_VX = 360
 const BASE_RELEASE_BOOST_X = 68
 const BASE_HURT_KNOCKBACK_VX = -150
+const BASE_MONSTER_RAMP_METERS = 110
 
 export let VIEW_W = LANDSCAPE_VIEW_W
 /** World height in pixels — fixed in every orientation; see the note above. */
 export const VIEW_H = 720
 
 export let HORIZONTAL_SCALE = 1
+/** Extra pace easing for mobile, on top of HORIZONTAL_SCALE — see the note above. */
+export let SPEED_EASE = 1
+/** Extra monster-density easing for mobile — see the note above. */
+export let DENSITY_EASE = 1
 /** Camera keeps the hamster this far from the left edge. */
 export let CAMERA_ANCHOR_X = BASE_CAMERA_ANCHOR_X
 /** How far ahead of the hamster we will look for a lantern to grab. */
@@ -66,11 +85,17 @@ export let PLAYER_START_VX = BASE_PLAYER_START_VX
  *  rather than a sudden jump in speed. */
 export let RELEASE_BOOST_X = BASE_RELEASE_BOOST_X
 export let HURT_KNOCKBACK_VX = BASE_HURT_KNOCKBACK_VX
+/** How many metres it takes a new tier's monster density to fully ease in.
+ *  Stretched out for mobile alongside DENSITY_EASE, so the ramp itself is
+ *  gentler too, not just its ceiling. */
+export let MONSTER_RAMP_METERS = BASE_MONSTER_RAMP_METERS
 
 /** Switch the world's horizontal focus region to suit the device's current
  *  orientation. Nothing vertical is touched — see the note above. */
 export function applyOrientation(isPortrait: boolean) {
   HORIZONTAL_SCALE = isPortrait ? PORTRAIT_SCALE : 1
+  SPEED_EASE = isPortrait ? PORTRAIT_SPEED_EASE : 1
+  DENSITY_EASE = isPortrait ? PORTRAIT_DENSITY_EASE : 1
   VIEW_W = isPortrait ? PORTRAIT_VIEW_W : LANDSCAPE_VIEW_W
   CAMERA_ANCHOR_X = BASE_CAMERA_ANCHOR_X * HORIZONTAL_SCALE
   HOOK_RANGE_AHEAD = BASE_HOOK_RANGE_AHEAD * HORIZONTAL_SCALE
@@ -78,9 +103,10 @@ export function applyOrientation(isPortrait: boolean) {
   CHUNK_WIDTH = BASE_CHUNK_WIDTH * HORIZONTAL_SCALE
   PX_PER_METER = BASE_PX_PER_METER * HORIZONTAL_SCALE
   PLAYER_START_X = BASE_PLAYER_START_X * HORIZONTAL_SCALE
-  PLAYER_START_VX = BASE_PLAYER_START_VX * HORIZONTAL_SCALE
-  RELEASE_BOOST_X = BASE_RELEASE_BOOST_X * HORIZONTAL_SCALE
-  HURT_KNOCKBACK_VX = BASE_HURT_KNOCKBACK_VX * HORIZONTAL_SCALE
+  PLAYER_START_VX = BASE_PLAYER_START_VX * HORIZONTAL_SCALE * SPEED_EASE
+  RELEASE_BOOST_X = BASE_RELEASE_BOOST_X * HORIZONTAL_SCALE * SPEED_EASE
+  HURT_KNOCKBACK_VX = BASE_HURT_KNOCKBACK_VX * HORIZONTAL_SCALE * SPEED_EASE
+  MONSTER_RAMP_METERS = BASE_MONSTER_RAMP_METERS / DENSITY_EASE
 }
 
 /** Underside of the mossy canopy — every swing anchor lives near this line.
@@ -192,9 +218,6 @@ export interface Tier {
   /** Ambient darkness of the canopy, 0..1. */
   readonly gloom: number
 }
-
-/** How many metres it takes a new tier's monster density to fully ease in. */
-export const MONSTER_RAMP_METERS = 110
 
 export const TIERS: readonly Tier[] = [
   {

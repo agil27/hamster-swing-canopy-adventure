@@ -2,10 +2,12 @@ import {
   CEILING_Y,
   CHUNKS_AHEAD,
   CHUNK_WIDTH,
+  DENSITY_EASE,
   GROUND_Y,
   HORIZONTAL_SCALE,
   MONSTER_RAMP_METERS,
   PX_PER_METER,
+  SPEED_EASE,
   TIERS,
   tierForDistance,
 } from './constants'
@@ -22,6 +24,10 @@ const GRASS_KINDS: GrassProp['kind'][] = ['buttercup', 'clover', 'dandelion', 'b
  * tier's distance threshold is crossed — that hard cliff is what made
  * monsters feel like they "suddenly" showed up. Each tier ramps linearly
  * from the previous tier's density up to its own over MONSTER_RAMP_METERS.
+ *
+ * DENSITY_EASE applies on top of that: on mobile it's a flat cut below
+ * what the tier curve alone would give (MONSTER_RAMP_METERS is also
+ * stretched out for mobile, so the ramp itself is gentler too).
  */
 function monsterDensityAt(meters: number): number {
   let density = 0
@@ -32,7 +38,7 @@ function monsterDensityAt(meters: number): number {
     const frac = clamp((meters - tier.from) / MONSTER_RAMP_METERS, 0, 1)
     density = lerp(prevDensity, tier.monsterDensity, frac)
   }
-  return density
+  return density * DENSITY_EASE
 }
 
 /**
@@ -198,12 +204,17 @@ export class World {
     // Density ramps smoothly across the tier boundary — see monsterDensityAt.
     const density = monsterDensityAt(meters)
     const monsterCount = Math.floor(density) + (rng.chance(density % 1) ? 1 : 0)
+    // Keep-clear margin from the chunk edges. Scales with the chunk itself —
+    // left as a flat 120px this used to eat almost half of a portrait-sized
+    // chunk, forcing multiple monsters into a cramped sliver and reading as
+    // "too dense" even though the tier's own density hadn't changed.
+    const placementMargin = 120 * HORIZONTAL_SCALE
     for (let i = 0; i < monsterCount; i++) {
       const kind =
         tier.id >= 2
           ? rng.pick<MonsterKind>(['slime', 'bat', 'hedgehog', 'bat'])
           : rng.pick<MonsterKind>(['slime', 'bat'])
-      const mx = rng.range(startX + 120, endX - 120)
+      const mx = rng.range(startX + placementMargin, endX - placementMargin)
       monsters.push(this.makeMonster(kind, mx, rng.range(0, Math.PI * 2), tier.id))
     }
 
@@ -236,7 +247,7 @@ export class World {
   }
 
   private makeMonster(kind: MonsterKind, x: number, phase: number, tierId: number): Monster {
-    const speedScale = (1 + tierId * 0.16) * HORIZONTAL_SCALE
+    const speedScale = (1 + tierId * 0.16) * HORIZONTAL_SCALE * SPEED_EASE
     switch (kind) {
       case 'slime':
         return {
