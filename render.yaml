@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: hamster-swing-canopy-adventure
+    name: hamswing
     runtime: static
     buildCommand: npm install && npm run build
     staticPublishPath: dist
