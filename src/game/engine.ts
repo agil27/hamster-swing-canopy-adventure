@@ -1101,6 +1101,19 @@ export class GameEngine {
     this.particles.popup(m.x, m.y - 34, `+${gained}`, '#ffd166', true, 26)
     this.shake = Math.max(this.shake, 16)
     audio.stomp()
+
+    // A clean stomp heals one heart back — a real (non-tutorial) reward
+    // for playing well, on top of the score. Tutorial practice stays
+    // exactly as it was; hearts there are governed entirely by
+    // tutorialSafeHearts/tutorialRevive.
+    if (!this.tutorialActive && this.hearts < MAX_HEARTS) {
+      this.hearts++
+      this.heartsFlashId++
+      this.particles.popup(m.x, m.y - 56, '+1 HEART', '#ff8fa8', true, 28)
+      this.particles.heartSparkle(m.x, m.y - 10, 14)
+      audio.heart()
+    }
+
     this.publishHud(true)
   }
 
