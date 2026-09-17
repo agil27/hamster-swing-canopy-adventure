@@ -55,11 +55,18 @@ export class World {
   private runSeed = 1
   /** Furthest chunk index the camera has ever reached (see update()). */
   private maxChunkReached = -1
+  /** While true, ambient seeds/hearts/mushrooms/monsters are suppressed —
+   *  the tutorial places exactly the one teaching object each phase needs
+   *  (see placeMonsterAt / placeMushroomAt / placeHeartAt), so nothing
+   *  ambient should ever compete with it for attention. Anchors, grass and
+   *  vines still generate normally — swing practice needs lanterns. */
+  private tutorialMode = false
 
-  reset(seed = Math.floor(Math.random() * 0xffffff)) {
+  reset(seed = Math.floor(Math.random() * 0xffffff), tutorialMode = false) {
     this.chunks.clear()
     this.runSeed = seed >>> 0
     this.maxChunkReached = -1
+    this.tutorialMode = tutorialMode
     monsterId = 1
     arcId = 1
     for (let i = 0; i < CHUNKS_AHEAD + 1; i++) this.ensureChunk(i)
@@ -192,68 +199,75 @@ export class World {
     // Every gap used to get a full arc, which read as visually crowded —
     // only about a third of eligible gaps get one now, and each is
     // sparser, so seeds stay a guide rather than wall-to-wall clutter.
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const a = anchors[i]
-      const b = anchors[i + 1]
-      const span = b.x - a.x
-      if (span < 90) continue
-      if (!rng.chance(0.35)) continue
+    // Suppressed entirely in tutorial mode — see tutorialMode above.
+    if (!this.tutorialMode) {
+      for (let i = 0; i < anchors.length - 1; i++) {
+        const a = anchors[i]
+        const b = anchors[i + 1]
+        const span = b.x - a.x
+        if (span < 90) continue
+        if (!rng.chance(0.35)) continue
 
-      const id = arcId++
-      const x0 = a.x + span * 0.16
-      const x1 = b.x - span * 0.1
-      // Swing bottoms out below the anchor, then the launch lifts the arc.
-      const yStart = clamp(a.y + rng.range(210, 300), CEILING_Y + 140, GROUND_Y - 120)
-      const yEnd = clamp(b.y + rng.range(190, 280), CEILING_Y + 140, GROUND_Y - 120)
-      const arcHeight = rng.range(90, 190)
-      const count = Math.max(3, Math.min(5, Math.round(span / 85)))
+        const id = arcId++
+        const x0 = a.x + span * 0.16
+        const x1 = b.x - span * 0.1
+        // Swing bottoms out below the anchor, then the launch lifts the arc.
+        const yStart = clamp(a.y + rng.range(210, 300), CEILING_Y + 140, GROUND_Y - 120)
+        const yEnd = clamp(b.y + rng.range(190, 280), CEILING_Y + 140, GROUND_Y - 120)
+        const arcHeight = rng.range(90, 190)
+        const count = Math.max(3, Math.min(5, Math.round(span / 85)))
 
-      for (let k = 0; k < count; k++) {
-        const t = count === 1 ? 0.5 : k / (count - 1)
-        const px = x0 + (x1 - x0) * t
-        // Straight line interpolation minus a parabolic lift = flight path.
-        const py = yStart + (yEnd - yStart) * t - arcHeight * 4 * t * (1 - t)
-        seeds.push({
-          x: px,
-          y: clamp(py, CEILING_Y + 70, GROUND_Y - 60),
-          phase: rng.range(0, Math.PI * 2),
-          taken: false,
-          arcId: id,
-        })
+        for (let k = 0; k < count; k++) {
+          const t = count === 1 ? 0.5 : k / (count - 1)
+          const px = x0 + (x1 - x0) * t
+          // Straight line interpolation minus a parabolic lift = flight path.
+          const py = yStart + (yEnd - yStart) * t - arcHeight * 4 * t * (1 - t)
+          seeds.push({
+            x: px,
+            y: clamp(py, CEILING_Y + 70, GROUND_Y - 60),
+            phase: rng.range(0, Math.PI * 2),
+            taken: false,
+            arcId: id,
+          })
+        }
+
+        // Occasionally crown the apex of an arc with a bonus pickup.
+        const apexX = (x0 + x1) / 2
+        const apexY = clamp((yStart + yEnd) / 2 - arcHeight, CEILING_Y + 80, GROUND_Y - 140)
+        if (index > 0 && rng.chance(0.13)) {
+          hearts.push({ x: apexX, y: apexY - 46, phase: rng.range(0, Math.PI * 2), taken: false })
+        } else if (tier.id >= 1 && rng.chance(0.1)) {
+          mushrooms.push({ x: apexX, y: apexY - 40, phase: rng.range(0, Math.PI * 2), taken: false })
+        }
       }
 
-      // Occasionally crown the apex of an arc with a bonus pickup.
-      const apexX = (x0 + x1) / 2
-      const apexY = clamp((yStart + yEnd) / 2 - arcHeight, CEILING_Y + 80, GROUND_Y - 140)
-      if (index > 0 && rng.chance(0.13)) {
-        hearts.push({ x: apexX, y: apexY - 46, phase: rng.range(0, Math.PI * 2), taken: false })
-      } else if (tier.id >= 1 && rng.chance(0.1)) {
-        mushrooms.push({ x: apexX, y: apexY - 40, phase: rng.range(0, Math.PI * 2), taken: false })
+      // A guaranteed heart every so often keeps long runs survivable.
+      if (index > 0 && index % 5 === 0 && anchors.length > 1) {
+        const a = rng.pick(anchors)
+        hearts.push({ x: a.x + 60, y: clamp(a.y + 260, CEILING_Y + 120, GROUND_Y - 120), phase: 0, taken: false })
       }
-    }
-
-    // A guaranteed heart every so often keeps long runs survivable.
-    if (index > 0 && index % 5 === 0 && anchors.length > 1) {
-      const a = rng.pick(anchors)
-      hearts.push({ x: a.x + 60, y: clamp(a.y + 260, CEILING_Y + 120, GROUND_Y - 120), phase: 0, taken: false })
     }
 
     // --- Monsters ------------------------------------------------------------
     // Density ramps smoothly across the tier boundary — see monsterDensityAt.
-    const density = monsterDensityAt(meters)
-    const monsterCount = Math.floor(density) + (rng.chance(density % 1) ? 1 : 0)
-    // Keep-clear margin from the chunk edges. Scales with the chunk itself —
-    // left as a flat 120px this used to eat almost half of a portrait-sized
-    // chunk, forcing multiple monsters into a cramped sliver and reading as
-    // "too dense" even though the tier's own density hadn't changed.
-    const placementMargin = 120 * HORIZONTAL_SCALE
-    for (let i = 0; i < monsterCount; i++) {
-      const kind =
-        tier.id >= 2
-          ? rng.pick<MonsterKind>(['slime', 'bat', 'hedgehog', 'bat'])
-          : rng.pick<MonsterKind>(['slime', 'bat'])
-      const mx = rng.range(startX + placementMargin, endX - placementMargin)
-      monsters.push(this.makeMonster(kind, mx, rng.range(0, Math.PI * 2), tier.id))
+    // Suppressed entirely in tutorial mode — the tutorial's own stomp phase
+    // places exactly the one monster it needs, via placeMonsterAt.
+    if (!this.tutorialMode) {
+      const density = monsterDensityAt(meters)
+      const monsterCount = Math.floor(density) + (rng.chance(density % 1) ? 1 : 0)
+      // Keep-clear margin from the chunk edges. Scales with the chunk itself —
+      // left as a flat 120px this used to eat almost half of a portrait-sized
+      // chunk, forcing multiple monsters into a cramped sliver and reading as
+      // "too dense" even though the tier's own density hadn't changed.
+      const placementMargin = 120 * HORIZONTAL_SCALE
+      for (let i = 0; i < monsterCount; i++) {
+        const kind =
+          tier.id >= 2
+            ? rng.pick<MonsterKind>(['slime', 'bat', 'hedgehog', 'bat'])
+            : rng.pick<MonsterKind>(['slime', 'bat'])
+        const mx = rng.range(startX + placementMargin, endX - placementMargin)
+        monsters.push(this.makeMonster(kind, mx, rng.range(0, Math.PI * 2), tier.id))
+      }
     }
 
     // --- Decoration ----------------------------------------------------------

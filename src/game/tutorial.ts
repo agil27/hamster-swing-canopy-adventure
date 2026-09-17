@@ -25,7 +25,7 @@ export const TUTORIAL_PHASES: readonly TutorialPhase[] = ['swing', 'stomp', 'mus
 
 export const TUTORIAL_INSTRUCTIONS: Readonly<Record<TutorialPhase, string>> = {
   swing: 'Hold to hook the lantern, then let go to swing!',
-  stomp: 'Land ON TOP of it for a STOMP!',
+  stomp: "Stomp on the monster's head to gain extra points!",
   mushroom: 'Grab the mushroom — invincible for a few seconds!',
   heart: 'These are your hearts — hits cost one, floating hearts heal you!',
   done: "You've got it — good luck out there!",
@@ -35,7 +35,7 @@ export const TUTORIAL_INSTRUCTIONS: Readonly<Record<TutorialPhase, string>> = {
  *  failed attempt at the same phase. */
 export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
   swing: "Don't worry — hold again to hook the next lantern!",
-  stomp: 'Ouch! Line up above it and land on TOP this time.',
+  stomp: 'Ouch! You got hit by the monster. Try again to stomp on the monster!',
   mushroom: 'Missed it — grab the next mushroom!',
   heart: 'Missed it — grab the next heart to heal up!',
 }

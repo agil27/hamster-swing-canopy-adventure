@@ -239,6 +239,15 @@ export class GameEngine {
   private tutorialMonster: Monster | null = null
   private tutorialMushroom: Mushroom | null = null
   private tutorialHeart: HeartPickup | null = null
+  /** Set the instant a stomp lands on tutorialMonster, consumed at the very
+   *  top of the next updateTutorial() tick — a real hit ALSO leaves that
+   *  monster with dead === true (it's removed either way, see takeDamage),
+   *  so a plain "is it dead?" check can't tell a win from a loss. This
+   *  flag is the one unambiguous signal, and checking it before anything
+   *  else means an unrelated same-frame heart loss (e.g. a hard landing
+   *  right after the stomp's own bounce) can never look at that same dead
+   *  flag first and revive the very monster that was just won against. */
+  private tutorialStompLanded = false
   /** Current handwritten note, or '' when nothing is showing. Gameplay is
    *  never frozen for it — it just sits for a while and fades (see
    *  TUTORIAL_HINT_DURATION / TUTORIAL_HINT_FADE) and only comes back if
@@ -257,8 +266,8 @@ export class GameEngine {
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  start(seed?: number) {
-    this.world.reset(seed)
+  start(seed?: number, tutorialMode = false) {
+    this.world.reset(seed, tutorialMode)
     this.particles.clear()
     this.tutorialActive = false
     this.tutorialHintText = ''
@@ -267,6 +276,7 @@ export class GameEngine {
     this.tutorialMonster = null
     this.tutorialMushroom = null
     this.tutorialHeart = null
+    this.tutorialStompLanded = false
 
     this.player = {
       x: PLAYER_START_X,
@@ -323,9 +333,11 @@ export class GameEngine {
   /** Same run setup as start(), plus a fixed layout and a four-phase guided
    *  script — see TUTORIAL_PHASES and updateTutorial(). Nothing is placed
    *  upfront: each phase's teaching object appears only once that phase
-   *  actually begins, so nothing shows up before it's relevant. */
+   *  actually begins, so nothing shows up before it's relevant — and the
+   *  world itself generates no ambient seeds/hearts/mushrooms/monsters at
+   *  all while in tutorial mode, so nothing ever competes with it either. */
   startTutorial() {
-    this.start(TUTORIAL_SEED)
+    this.start(TUTORIAL_SEED, true)
     this.tutorialActive = true
     this.tutorialPhaseIndex = 0
     this.tutorialStepTimer = 0
@@ -335,6 +347,7 @@ export class GameEngine {
     this.tutorialMonster = null
     this.tutorialMushroom = null
     this.tutorialHeart = null
+    this.tutorialStompLanded = false
     this.showTutorialHint(TUTORIAL_INSTRUCTIONS.swing)
     this.publishHud(true)
   }
@@ -983,6 +996,9 @@ export class GameEngine {
     m.spin = 0
     m.vx = 0
     m.vy = 90 // a little starting pop so the fall reads immediately, not a slow drift
+    if (this.tutorialActive && TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp' && m === this.tutorialMonster) {
+      this.tutorialStompLanded = true
+    }
     this.monstersStomped++
     this.bumpCombo()
 
@@ -1119,6 +1135,20 @@ export class GameEngine {
       return
     }
 
+    // A stomp landing on the tutorial's own monster is credited immediately,
+    // before anything else this frame gets a look — including an unrelated
+    // heart loss below, which would otherwise read the exact same "m.dead"
+    // flag a real hit leaves behind and revive the monster that was just
+    // beaten (see tutorialStompLanded's own comment for why m.dead alone
+    // can't tell the two apart). Any heart lost this same frame still gets
+    // quietly undone — practice never costs a real heart, win or lose.
+    if (this.tutorialStompLanded) {
+      this.tutorialStompLanded = false
+      if (this.hearts < this.tutorialSafeHearts) this.tutorialUndoHeartLoss()
+      this.advanceTutorialPhase(2, 'Good job!')
+      return
+    }
+
     if (this.hearts < this.tutorialSafeHearts) {
       this.tutorialRevive()
       return
@@ -1142,10 +1172,10 @@ export class GameEngine {
         break
       }
       case 'stomp': {
+        // A win is handled above via tutorialStompLanded — only the "flew
+        // past without landing it" case is left to check here.
         const m = this.tutorialMonster
-        if (m?.dead) {
-          this.advanceTutorialPhase(2, 'Nice STOMP!')
-        } else if (m && (p.x - m.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+        if (m && !m.dead && (p.x - m.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
           this.relocateTutorialTarget('monster')
         }
         break
@@ -1202,19 +1232,32 @@ export class GameEngine {
     this.publishHud(true)
   }
 
+  /** Just the heart/iframe/combo side of undoing a cost — no monster
+   *  involvement, no popup, no note. Shared by a genuine failure
+   *  (tutorialRevive) and by a win that happened to coincide with an
+   *  unrelated heart loss the same frame, where none of that drama
+   *  belongs. */
+  private tutorialUndoHeartLoss() {
+    const p = this.player
+    this.hearts = this.tutorialSafeHearts
+    this.iframeTime = 0.6
+    this.resetCombo()
+    if (p.vy > -100) p.vy = -260 // pop back into the air if they were falling/settled
+  }
+
   /** Quietly undoes whatever just cost a heart and lets the player keep
    *  going from exactly where they are — the "unlimited attempts, never
    *  sent back" behaviour for getting hit or hitting the ground hard. */
   private tutorialRevive() {
     const p = this.player
-    this.hearts = this.tutorialSafeHearts
-    this.iframeTime = 0.6
-    this.resetCombo()
+    this.tutorialUndoHeartLoss()
     this.releaseHook()
-    if (p.vy > -100) p.vy = -260 // pop back into the air if they were falling/settled
 
+    // Only resurrect the monster while still actually on the stomp phase —
+    // once it's been won (see tutorialStompLanded), this stale reference is
+    // no longer anyone's business.
     const m = this.tutorialMonster
-    if (m?.dead) {
+    if (m?.dead && TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp') {
       m.dead = false
       m.deadTime = 0
       m.squash = 0

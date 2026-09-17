@@ -57,7 +57,7 @@ const BASE_PLAYER_START_X = 220
 const BASE_PLAYER_START_VX = 360
 const BASE_RELEASE_BOOST_X = 68
 const BASE_HURT_KNOCKBACK_VX = -150
-const BASE_MONSTER_RAMP_METERS = 110
+const BASE_MONSTER_RAMP_METERS = 160
 
 export let VIEW_W = LANDSCAPE_VIEW_W
 /** World height in pixels — fixed in every orientation; see the note above. */
@@ -237,28 +237,28 @@ export const TIERS: readonly Tier[] = [
   {
     id: 1,
     name: 'Forest Edge',
-    from: 40,
+    from: 110,
     accent: '#ffd166',
     anchorGap: [220, 305],
-    monsterDensity: 0.65,
+    monsterDensity: 0.5,
     gloom: 0.16,
   },
   {
     id: 2,
     name: 'Dark Canopy',
-    from: 150,
+    from: 280,
     accent: '#a78bfa',
     anchorGap: [255, 360],
-    monsterDensity: 1.3,
+    monsterDensity: 1,
     gloom: 0.42,
   },
   {
     id: 3,
     name: 'Extreme Rush',
-    from: 350,
+    from: 550,
     accent: '#ff7b7b',
     anchorGap: [290, 430],
-    monsterDensity: 2,
+    monsterDensity: 1.6,
     gloom: 0.6,
   },
 ]
