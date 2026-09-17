@@ -3,7 +3,11 @@ services:
     name: hamswing
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    # --include=dev is required: NODE_ENV=production below (correct for the
+    # running server — see server/auth.js's cookie `secure` flag) also
+    # makes a plain `npm install` skip devDependencies, but the build
+    # itself needs vite/typescript/@types/* to run at all.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     pullRequestPreviewsEnabled: false
     envVars:
