@@ -15,9 +15,13 @@
  * keep going — the target itself hops back into reach if they overshoot
  * it, rather than the player ever being sent backward.
  *
- * Each phase's teaching object (monster/mushroom/heart) is placed only the
- * instant that phase begins — never upfront — so nothing shows up before
- * it's actually relevant.
+ * Each phase's teaching object (monster/mushroom/heart) is placed only once
+ * that phase's own instruction note has had its say and faded away — never
+ * upfront, and never while the note is still on screen — so reading and
+ * doing never compete for the same moment, and the player can never reach
+ * (or stomp) something before ever seeing what it was for. A miss follows
+ * the same rule: the retry note shows first, and the target only reappears
+ * once that fades too.
  */
 export type TutorialPhase = 'swing' | 'stomp' | 'mushroom' | 'heart' | 'done'
 
@@ -32,7 +36,10 @@ export const TUTORIAL_INSTRUCTIONS: Readonly<Record<TutorialPhase, string>> = {
 }
 
 /** Shown instead of TUTORIAL_INSTRUCTIONS when the note reappears after a
- *  failed attempt at the same phase. */
+ *  failed attempt at the same phase. The stomp one is only ever shown for
+ *  an actual hit from the monster (see tutorialHitByMonster) — never for
+ *  an unrelated heart loss, like a hard ground landing, that just happens
+ *  to land during the same phase. */
 export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
   swing: "Don't worry — hold again to hook the next lantern!",
   stomp: 'Ouch! You got hit by the monster. Try again to stomp on the monster!',
@@ -45,13 +52,37 @@ export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase,
 export const TUTORIAL_SWING_REPS = 3
 
 /** How far ahead (metres) a phase's teaching object is placed, relative to
- *  the player's position the instant that phase begins. */
+ *  the player's position the instant it actually spawns (once that phase's
+ *  note has finished showing — see the file header). */
 export const TUTORIAL_PLACE_AHEAD_METERS = 10
 
-/** How far ahead (metres) a missed target hops forward to stay reachable,
- *  rather than ever pulling the player backward to retry. */
-export const TUTORIAL_RELOCATE_METERS = 16
-/** How far past a target (metres) counts as "missed it, relocate". */
+/** How many monsters the stomp phase spawns together (a small cluster
+ *  rather than one single target) — landing a stomp on any one of them
+ *  advances the phase, so a miss on the first still leaves another right
+ *  behind it instead of forcing a full relocate-and-wait. Kept modest on
+ *  purpose — this is "a bit more forgiving," not "a wall of monsters." */
+export const TUTORIAL_STOMP_MONSTER_COUNT = 2
+
+/** Same idea for the mushroom phase's own pickup. */
+export const TUTORIAL_MUSHROOM_COUNT = 2
+
+/** Spacing (metres) between consecutive members of a stomp/mushroom
+ *  cluster. */
+export const TUTORIAL_CLUSTER_GAP_METERS = 7
+
+/** How much further ahead (metres), beyond the mushroom cluster's last
+ *  member, the mushroom phase's bonus monster spawns — close enough to
+ *  reach well within the mushroom's invincibility window, so the player
+ *  can smash straight through it and actually see what the mushroom
+ *  does. */
+export const TUTORIAL_MUSHROOM_MONSTER_GAP_METERS = 9
+
+/** How far past a target (metres) counts as "missed it, relocate" — for a
+ *  cluster, this means past every member of it. A missed cluster's
+ *  replacement spawns the same TUTORIAL_PLACE_AHEAD_METERS ahead of
+ *  wherever the player actually is once the retry note fades — never
+ *  behind them, since it's a fresh spawn, not the old one dragged
+ *  forward. */
 export const TUTORIAL_MISS_MARGIN_METERS = 3
 
 /** Fixed so every tutorial run opens with the same forgiving lantern ladder. */

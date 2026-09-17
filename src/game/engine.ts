@@ -54,17 +54,21 @@ import { ParticleSystem } from './particles'
 import { clamp, damp, lerp } from './rng'
 import {
   TUTORIAL_CELEBRATE_DURATION,
+  TUTORIAL_CLUSTER_GAP_METERS,
   TUTORIAL_DONE_DURATION,
   TUTORIAL_HINT_DURATION,
   TUTORIAL_INSTRUCTIONS,
   TUTORIAL_MISS_MARGIN_METERS,
+  TUTORIAL_MUSHROOM_COUNT,
+  TUTORIAL_MUSHROOM_MONSTER_GAP_METERS,
   TUTORIAL_PHASES,
   TUTORIAL_PLACE_AHEAD_METERS,
-  TUTORIAL_RELOCATE_METERS,
   TUTORIAL_RETRY_INSTRUCTIONS,
   TUTORIAL_SEED,
+  TUTORIAL_STOMP_MONSTER_COUNT,
   TUTORIAL_SWING_REPS,
 } from './tutorial'
+import type { TutorialPhase } from './tutorial'
 import type { Anchor, GamePhase, HeartPickup, HudState, Monster, Mushroom } from './types'
 import { World } from './world'
 
@@ -234,20 +238,38 @@ export class GameEngine {
   /** Hearts value a mid-phase "hit" gets quietly restored to — the cost is
    *  undone rather than the player being sent back anywhere. */
   private tutorialSafeHearts = MAX_HEARTS
-  /** The guaranteed teaching objects — each placed lazily, right as its own
-   *  phase begins, so nothing shows up before it's actually relevant. */
-  private tutorialMonster: Monster | null = null
-  private tutorialMushroom: Mushroom | null = null
+  /** The guaranteed teaching objects — each placed only once its own
+   *  phase's note has finished showing (see tutorialPendingPlacement), so
+   *  nothing shows up before it's actually relevant, or while the note
+   *  introducing it is still on screen. Stomp and mushroom each spawn a
+   *  small cluster (landing/grabbing any one of them counts) rather than
+   *  a single all-or-nothing target — see TUTORIAL_STOMP_MONSTER_COUNT /
+   *  TUTORIAL_MUSHROOM_COUNT. tutorialMonsters doubles as the mushroom
+   *  phase's bonus "something to smash while invincible" monster too. */
+  private tutorialMonsters: Monster[] = []
+  private tutorialMushrooms: Mushroom[] = []
   private tutorialHeart: HeartPickup | null = null
-  /** Set the instant a stomp lands on tutorialMonster, consumed at the very
-   *  top of the next updateTutorial() tick — a real hit ALSO leaves that
-   *  monster with dead === true (it's removed either way, see takeDamage),
-   *  so a plain "is it dead?" check can't tell a win from a loss. This
-   *  flag is the one unambiguous signal, and checking it before anything
-   *  else means an unrelated same-frame heart loss (e.g. a hard landing
-   *  right after the stomp's own bounce) can never look at that same dead
-   *  flag first and revive the very monster that was just won against. */
+  /** A phase whose teaching object hasn't spawned yet — it's waiting for
+   *  the current note to finish its hold-and-fade. Consumed the instant
+   *  tutorialHintText next goes back to '' (see updateTutorial()). */
+  private tutorialPendingPlacement: TutorialPhase | null = null
+  /** Set the instant a stomp lands on one of tutorialMonsters, consumed at
+   *  the very top of the next updateTutorial() tick — a real hit ALSO
+   *  leaves that monster with dead === true (it's removed either way, see
+   *  takeDamage), so a plain "is it dead?" check can't tell a win from a
+   *  loss. This flag is the one unambiguous signal, and checking it before
+   *  anything else means an unrelated same-frame heart loss (e.g. a hard
+   *  landing right after the stomp's own bounce) can never look at that
+   *  same dead flag first and revive the very monster that was just won
+   *  against. */
   private tutorialStompLanded = false
+  /** Set the instant a real hit (not a stomp) lands on one of
+   *  tutorialMonsters — the one thing that actually earns the phase's
+   *  "Ouch, you got hit" retry note. An unrelated heart loss (a hard
+   *  ground landing, say) undoes the heart the same as any hit would, but
+   *  must never show that note — nothing was actually hit. Consumed by
+   *  tutorialRevive(). */
+  private tutorialHitByMonster = false
   /** Current handwritten note, or '' when nothing is showing. Gameplay is
    *  never frozen for it — it just sits for a while and fades (see
    *  TUTORIAL_HINT_DURATION / TUTORIAL_HINT_FADE) and only comes back if
@@ -273,10 +295,12 @@ export class GameEngine {
     this.tutorialHintText = ''
     this.tutorialHintTimer = 0
     this.tutorialHintNextText = ''
-    this.tutorialMonster = null
-    this.tutorialMushroom = null
+    this.tutorialMonsters = []
+    this.tutorialMushrooms = []
     this.tutorialHeart = null
     this.tutorialStompLanded = false
+    this.tutorialHitByMonster = false
+    this.tutorialPendingPlacement = null
 
     this.player = {
       x: PLAYER_START_X,
@@ -344,10 +368,11 @@ export class GameEngine {
     this.tutorialSwingReps = 0
     this.tutorialWasAttached = false
     this.tutorialSafeHearts = this.hearts
-    this.tutorialMonster = null
-    this.tutorialMushroom = null
+    this.tutorialMonsters = []
+    this.tutorialMushrooms = []
     this.tutorialHeart = null
     this.tutorialStompLanded = false
+    this.tutorialHitByMonster = false
     this.showTutorialHint(TUTORIAL_INSTRUCTIONS.swing)
     this.publishHud(true)
   }
@@ -996,7 +1021,7 @@ export class GameEngine {
     m.spin = 0
     m.vx = 0
     m.vy = 90 // a little starting pop so the fall reads immediately, not a slow drift
-    if (this.tutorialActive && TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp' && m === this.tutorialMonster) {
+    if (this.tutorialActive && TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp' && this.tutorialMonsters.includes(m)) {
       this.tutorialStompLanded = true
     }
     this.monstersStomped++
@@ -1058,6 +1083,10 @@ export class GameEngine {
     m.spin = 0.001
     m.vx = (m.x > p.x ? 1 : -1) * (200 + Math.random() * 140)
     m.vy = -300 - Math.random() * 120
+
+    // The one signal tutorialRevive() trusts for "actually got hit" — see
+    // its own comment on tutorialHitByMonster.
+    if (this.tutorialActive && this.tutorialMonsters.includes(m)) this.tutorialHitByMonster = true
 
     if (this.hearts <= 0) {
       this.hearts = 0
@@ -1125,6 +1154,11 @@ export class GameEngine {
           this.tutorialHintNextText = ''
         } else {
           this.tutorialHintText = ''
+          // The note just introducing (or re-introducing) this phase has
+          // fully gone — only now does its teaching object actually spawn,
+          // so the player can never reach it before ever seeing what it's
+          // for (see spawnPendingTutorialTarget()).
+          if (this.tutorialPendingPlacement) this.spawnPendingTutorialTarget()
         }
       }
     }
@@ -1172,19 +1206,22 @@ export class GameEngine {
         break
       }
       case 'stomp': {
-        // A win is handled above via tutorialStompLanded — only the "flew
-        // past without landing it" case is left to check here.
-        const m = this.tutorialMonster
-        if (m && !m.dead && (p.x - m.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+        // A win is handled above via tutorialStompLanded — only "flew past
+        // every one of them without landing it" is left to check here.
+        const monsters = this.tutorialMonsters
+        if (monsters.length > 0 && monsters.every((m) => (p.x - m.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS)) {
           this.relocateTutorialTarget('monster')
         }
         break
       }
       case 'mushroom': {
-        const mu = this.tutorialMushroom
-        if (mu?.taken) {
+        const mushrooms = this.tutorialMushrooms
+        if (mushrooms.some((mu) => mu.taken)) {
           this.advanceTutorialPhase(3, 'Invincible!')
-        } else if (mu && (p.x - mu.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+        } else if (
+          mushrooms.length > 0 &&
+          mushrooms.every((mu) => (p.x - mu.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS)
+        ) {
           this.relocateTutorialTarget('mushroom')
         }
         break
@@ -1206,8 +1243,10 @@ export class GameEngine {
    *  note shows first (TUTORIAL_CELEBRATE_DURATION) and then automatically
    *  chains into the new phase's instruction, which then sits and fades on
    *  its own like any other note (see showTutorialHint()). The new phase's
-   *  teaching object is placed only now, at the player's current position,
-   *  so nothing exists before this exact moment. */
+   *  teaching object isn't placed yet — it only spawns once that whole note
+   *  sequence has actually faded away (see spawnPendingTutorialTarget()),
+   *  so the player can never stumble into it mid-sentence, before it was
+   *  ever explained. */
   private advanceTutorialPhase(next: number, celebrateText?: string) {
     this.tutorialPhaseIndex = next
     // New baseline for the "hearts dropped" check above — each phase only
@@ -1215,10 +1254,10 @@ export class GameEngine {
     this.tutorialSafeHearts = this.hearts
     const phase = TUTORIAL_PHASES[next]
 
-    const aheadX = this.player.x + TUTORIAL_PLACE_AHEAD_METERS * PX_PER_METER
-    if (phase === 'stomp') this.tutorialMonster = this.world.placeMonsterAt(aheadX, 'slime')
-    else if (phase === 'mushroom') this.tutorialMushroom = this.world.placeMushroomAt(aheadX)
-    else if (phase === 'heart') this.tutorialHeart = this.world.placeHeartAt(aheadX)
+    this.tutorialMonsters = []
+    this.tutorialMushrooms = []
+    this.tutorialHeart = null
+    this.tutorialPendingPlacement = phase === 'stomp' || phase === 'mushroom' || phase === 'heart' ? phase : null
 
     if (phase === 'done') {
       this.tutorialStepTimer = TUTORIAL_DONE_DURATION
@@ -1230,6 +1269,46 @@ export class GameEngine {
     }
     audio.comboUp(0)
     this.publishHud(true)
+  }
+
+  /** Spawns whatever tutorialPendingPlacement is waiting on, right where
+   *  the player actually is now that the note introducing it has finished
+   *  — always through the world's placeXAt() helpers, so the object lands
+   *  in the chunk that actually matches its position (see the note on
+   *  relocateTutorialTarget() about why that matters). Stomp and mushroom
+   *  each spawn a small cluster rather than one single target — landing
+   *  or grabbing any one of them counts (see TUTORIAL_STOMP_MONSTER_COUNT /
+   *  TUTORIAL_MUSHROOM_COUNT). The mushroom phase also drops a bonus
+   *  monster a little further out, so there's something to smash through
+   *  and actually see the invincibility do something. */
+  private spawnPendingTutorialTarget() {
+    const phase = this.tutorialPendingPlacement
+    this.tutorialPendingPlacement = null
+    if (!phase) return
+
+    const baseX = this.player.x + TUTORIAL_PLACE_AHEAD_METERS * PX_PER_METER
+    const gap = TUTORIAL_CLUSTER_GAP_METERS * PX_PER_METER
+
+    if (phase === 'stomp') {
+      this.tutorialMonsters = []
+      for (let i = 0; i < TUTORIAL_STOMP_MONSTER_COUNT; i++) {
+        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+      }
+    } else if (phase === 'mushroom') {
+      this.tutorialMushrooms = []
+      for (let i = 0; i < TUTORIAL_MUSHROOM_COUNT; i++) {
+        this.tutorialMushrooms.push(this.world.placeMushroomAt(baseX + i * gap))
+      }
+      // Only the mushrooms themselves were cleared on a miss-relocate (see
+      // relocateTutorialTarget) — if the bonus monster is still around from
+      // the initial spawn, leave it be rather than spawning a second one.
+      if (this.tutorialMonsters.length === 0) {
+        const monsterX = baseX + (TUTORIAL_MUSHROOM_COUNT - 1) * gap + TUTORIAL_MUSHROOM_MONSTER_GAP_METERS * PX_PER_METER
+        this.tutorialMonsters = [this.world.placeMonsterAt(monsterX, 'slime')]
+      }
+    } else if (phase === 'heart') {
+      this.tutorialHeart = this.world.placeHeartAt(baseX)
+    }
   }
 
   /** Just the heart/iframe/combo side of undoing a cost — no monster
@@ -1247,24 +1326,36 @@ export class GameEngine {
 
   /** Quietly undoes whatever just cost a heart and lets the player keep
    *  going from exactly where they are — the "unlimited attempts, never
-   *  sent back" behaviour for getting hit or hitting the ground hard. */
+   *  sent back" behaviour for getting hit or hitting the ground hard. The
+   *  "Ouch, you got hit" note only ever reappears when tutorialHitByMonster
+   *  says this heart loss actually was a hit — an unrelated hard landing
+   *  (or one that happens while a target is still mid-spawn, waiting on an
+   *  earlier note to fade) undoes the heart just the same but stays quiet,
+   *  so it can never masquerade as "the monster got you" and can never
+   *  keep re-arming (and thus indefinitely postponing) a note that's
+   *  simply waiting to finish its own hold time. */
   private tutorialRevive() {
     const p = this.player
     this.tutorialUndoHeartLoss()
     this.releaseHook()
 
-    // Only resurrect the monster while still actually on the stomp phase —
-    // once it's been won (see tutorialStompLanded), this stale reference is
-    // no longer anyone's business.
-    const m = this.tutorialMonster
-    if (m?.dead && TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp') {
-      m.dead = false
-      m.deadTime = 0
-      m.squash = 0
-      m.spin = 0
-      m.x = m.homeX
-      m.y = m.homeY
-      m.vy = 0
+    const hitByMonster = this.tutorialHitByMonster
+    this.tutorialHitByMonster = false
+
+    // Only resurrect monsters while still actually on the stomp phase —
+    // once it's been won (see tutorialStompLanded), any stale dead
+    // reference left in the array is no longer anyone's business.
+    if (TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp') {
+      for (const m of this.tutorialMonsters) {
+        if (!m.dead) continue
+        m.dead = false
+        m.deadTime = 0
+        m.squash = 0
+        m.spin = 0
+        m.x = m.homeX
+        m.y = m.homeY
+        m.vy = 0
+      }
     }
 
     this.flash = 0.25
@@ -1273,10 +1364,10 @@ export class GameEngine {
     this.particles.popup(p.x, p.y - 60, 'Try again!', '#ffb347', true, 26)
     audio.uiClick()
 
-    // Bring the note back — it had likely already faded by the time this
-    // phase's own mistake happened.
-    const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
-    if (retryText) this.showTutorialHint(retryText)
+    if (hitByMonster) {
+      const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
+      if (retryText) this.showTutorialHint(retryText)
+    }
 
     this.publishHud(true)
   }
@@ -1300,25 +1391,21 @@ export class GameEngine {
   }
 
   /** A fixed target the player overshot hops forward into reach instead of
-   *  ever pulling the player back to retry it. */
+   *  ever pulling the player back to retry it — via a brand-new object
+   *  through the same placeXAt() helpers the initial spawn uses (never by
+   *  mutating .x on the old one), because that old object still lives in
+   *  whatever chunk it was originally generated into; just moving its x
+   *  can walk it out of every chunk the camera will ever ask for again
+   *  (or into one already pruned), silently stranding it — invisible,
+   *  uncollidable, and the phase stuck forever waiting on it. The retry
+   *  note shows immediately; the replacement itself waits for that note to
+   *  fade, same as any other spawn (see spawnPendingTutorialTarget()). */
   private relocateTutorialTarget(kind: 'monster' | 'mushroom' | 'heart') {
-    const aheadX = this.player.x + TUTORIAL_RELOCATE_METERS * PX_PER_METER
-    if (kind === 'monster' && this.tutorialMonster) {
-      const m = this.tutorialMonster
-      m.x = aheadX
-      m.homeX = aheadX
-      m.dead = false
-      m.deadTime = 0
-      m.squash = 0
-      m.spin = 0
-      m.vy = 0
-    } else if (kind === 'mushroom' && this.tutorialMushroom) {
-      this.tutorialMushroom.x = aheadX
-      this.tutorialMushroom.taken = false
-    } else if (kind === 'heart' && this.tutorialHeart) {
-      this.tutorialHeart.x = aheadX
-      this.tutorialHeart.taken = false
-    }
+    if (kind === 'monster') this.tutorialMonsters = []
+    else if (kind === 'mushroom') this.tutorialMushrooms = []
+    else this.tutorialHeart = null
+
+    this.tutorialPendingPlacement = TUTORIAL_PHASES[this.tutorialPhaseIndex]
 
     const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
     if (retryText) this.showTutorialHint(retryText)
