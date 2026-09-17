@@ -2,22 +2,24 @@ services:
   - type: web
     name: hamswing
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install && npm run build
     startCommand: npm start
     pullRequestPreviewsEnabled: false
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DB_PATH
-        value: /var/data/hamswing.db
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: SESSION_SECRET
         generateValue: true
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
-    disk:
-      name: hamswing-data
-      mountPath: /var/data
-      sizeGB: 1
+    # No persistent disk on the free plan — DB_PATH is left unset, so
+    # server/db.js falls back to a path inside the app's own (ephemeral)
+    # filesystem. That means accounts/scores reset on every deploy AND
+    # every time the free instance spins back up after going idle (~15
+    # min of inactivity puts it to sleep; the next request wakes it into a
+    # fresh container). Accepted tradeoff for staying free — see the
+    # README/.env.example if this ever needs to become durable, which
+    # just means adding a paid plan + disk and setting DB_PATH to it.
