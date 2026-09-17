@@ -176,10 +176,15 @@ export const CRASH_SEQUENCE_DURATION = 2.0
 /** A stomp only counts when the hamster is not rising faster than this. */
 export const STOMP_VY_THRESHOLD = -40
 export const STOMP_BOUNCE_VY = -420
-export const STOMP_SCORE = 250
-/** Brief slow-motion freeze on impact (stomp/smash) for a punchier feel. */
-export const HITSTOP_DURATION = 0.055
-export const HITSTOP_SCALE = 0.1
+/** Comfortably the biggest reward for a single action — stomping should be
+ *  the thing players are visibly chasing, well above a seed (SEED_SCORE)
+ *  or even a mushroom pickup (MUSHROOM_SCORE). */
+export const STOMP_SCORE = 400
+/** Slow-motion freeze on a stomp — short and snappy (0.14s read as too
+ *  long/unnatural), but still tuned a notch heavier than getting hit so
+ *  stomping stays the best-feeling impact in the game. */
+export const HITSTOP_DURATION = 0.06
+export const HITSTOP_SCALE = 0.08
 export const SEED_SCORE = 100
 export const HEART_FULL_BONUS = 500
 export const MUSHROOM_SCORE = 300
@@ -235,7 +240,7 @@ export const TIERS: readonly Tier[] = [
     from: 40,
     accent: '#ffd166',
     anchorGap: [220, 305],
-    monsterDensity: 1.1,
+    monsterDensity: 0.65,
     gloom: 0.16,
   },
   {
@@ -244,7 +249,7 @@ export const TIERS: readonly Tier[] = [
     from: 150,
     accent: '#a78bfa',
     anchorGap: [255, 360],
-    monsterDensity: 2.1,
+    monsterDensity: 1.3,
     gloom: 0.42,
   },
   {
@@ -253,7 +258,7 @@ export const TIERS: readonly Tier[] = [
     from: 350,
     accent: '#ff7b7b',
     anchorGap: [290, 430],
-    monsterDensity: 3.1,
+    monsterDensity: 2,
     gloom: 0.6,
   },
 ]

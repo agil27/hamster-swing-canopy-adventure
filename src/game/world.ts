@@ -110,6 +110,40 @@ export class World {
     return out
   }
 
+  /** Guarantees a monster exists at approximately this world x, regardless
+   *  of the normal procedural density curve — used by the tutorial to
+   *  place a reliable teaching target. Returns a live reference so the
+   *  caller can watch it (or revive it on a retry). */
+  placeMonsterAt(x: number, kind: MonsterKind): Monster {
+    const index = Math.floor(x / CHUNK_WIDTH)
+    this.ensureChunk(index)
+    const chunk = this.chunks.get(index)!
+    const tierId = tierForDistance(x / PX_PER_METER).id
+    const monster = this.makeMonster(kind, x, Math.random() * Math.PI * 2, tierId)
+    chunk.monsters.push(monster)
+    return monster
+  }
+
+  /** Same guarantee for a mushroom pickup — used by the tutorial. */
+  placeMushroomAt(x: number): Mushroom {
+    const index = Math.floor(x / CHUNK_WIDTH)
+    this.ensureChunk(index)
+    const chunk = this.chunks.get(index)!
+    const mushroom: Mushroom = { x, y: GROUND_Y - 220, phase: Math.random() * Math.PI * 2, taken: false }
+    chunk.mushrooms.push(mushroom)
+    return mushroom
+  }
+
+  /** Same guarantee for a heart pickup — used by the tutorial. */
+  placeHeartAt(x: number): HeartPickup {
+    const index = Math.floor(x / CHUNK_WIDTH)
+    this.ensureChunk(index)
+    const chunk = this.chunks.get(index)!
+    const heart: HeartPickup = { x, y: GROUND_Y - 180, phase: Math.random() * Math.PI * 2, taken: false }
+    chunk.hearts.push(heart)
+    return heart
+  }
+
   private ensureChunk(index: number) {
     if (this.chunks.has(index)) return
     this.chunks.set(index, this.generate(index))
@@ -155,11 +189,15 @@ export class World {
     // --- Golden seed arcs ----------------------------------------------------
     // Each arc traces the parabola a good release produces between two
     // lanterns, so following the seeds teaches the right release angle.
+    // Every gap used to get a full arc, which read as visually crowded —
+    // only about a third of eligible gaps get one now, and each is
+    // sparser, so seeds stay a guide rather than wall-to-wall clutter.
     for (let i = 0; i < anchors.length - 1; i++) {
       const a = anchors[i]
       const b = anchors[i + 1]
       const span = b.x - a.x
       if (span < 90) continue
+      if (!rng.chance(0.35)) continue
 
       const id = arcId++
       const x0 = a.x + span * 0.16
@@ -168,7 +206,7 @@ export class World {
       const yStart = clamp(a.y + rng.range(210, 300), CEILING_Y + 140, GROUND_Y - 120)
       const yEnd = clamp(b.y + rng.range(190, 280), CEILING_Y + 140, GROUND_Y - 120)
       const arcHeight = rng.range(90, 190)
-      const count = Math.max(4, Math.min(8, Math.round(span / 58)))
+      const count = Math.max(3, Math.min(5, Math.round(span / 85)))
 
       for (let k = 0; k < count; k++) {
         const t = count === 1 ? 0.5 : k / (count - 1)

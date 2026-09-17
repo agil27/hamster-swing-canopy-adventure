@@ -23,7 +23,7 @@ const ROWS: Array<{ icon: ReactNode; title: string; body: string }> = [
   {
     icon: <span className="text-2xl">👟</span>,
     title: 'Stomp the monsters',
-    body: 'Drop onto slimes, bats and hedgehogs from above for a bouncy +250. Touch one from the side and it costs a heart.',
+    body: 'Drop onto slimes, bats and hedgehogs from above for a big bouncy reward. Touch one from the side and it costs a heart.',
   },
   {
     icon: <span className="text-2xl">❤️</span>,

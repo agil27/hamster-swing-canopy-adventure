@@ -276,11 +276,13 @@ export function drawMonster(ctx: CanvasRenderingContext2D, m: Monster, camX: num
   ctx.translate(x, y)
 
   if (m.dead) {
-    // Both defeat animations now physically travel out of view before they
+    // Both defeat animations physically travel out of view before they
     // fade — the tumble flies sideways off-screen, the stomp actually falls
-    // with gravity — so the fade itself just needs to be slow enough that
-    // it never visibly pops away before the motion has carried it off.
-    const fadeDuration = 1.3
+    // with gravity — so disappearing is the *motion* carrying it off, not
+    // the fade; the fade itself is a slow safety net well behind that, long
+    // enough it's essentially never seen (a stomped monster is off the
+    // bottom of the screen in well under a second).
+    const fadeDuration = m.spin !== 0 ? 1.1 : 2.2
     const t = clamp(m.deadTime / fadeDuration, 0, 1)
     ctx.globalAlpha = 1 - t
     if (m.spin !== 0) {

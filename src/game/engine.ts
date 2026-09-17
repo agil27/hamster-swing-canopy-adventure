@@ -52,7 +52,20 @@ import {
 } from './constants'
 import { ParticleSystem } from './particles'
 import { clamp, damp, lerp } from './rng'
-import type { Anchor, GamePhase, HudState, Monster } from './types'
+import {
+  TUTORIAL_CELEBRATE_DURATION,
+  TUTORIAL_DONE_DURATION,
+  TUTORIAL_HINT_DURATION,
+  TUTORIAL_INSTRUCTIONS,
+  TUTORIAL_MISS_MARGIN_METERS,
+  TUTORIAL_PHASES,
+  TUTORIAL_PLACE_AHEAD_METERS,
+  TUTORIAL_RELOCATE_METERS,
+  TUTORIAL_RETRY_INSTRUCTIONS,
+  TUTORIAL_SEED,
+  TUTORIAL_SWING_REPS,
+} from './tutorial'
+import type { Anchor, GamePhase, HeartPickup, HudState, Monster, Mushroom } from './types'
 import { World } from './world'
 
 export interface Player {
@@ -176,8 +189,10 @@ export class GameEngine {
   invincibleTime = 0
   iframeTime = 0
   crashTimer = 0
-  /** Brief slow-motion freeze on a stomp/smash impact. */
+  /** Brief slow-motion freeze on a stomp/smash/hit/fall impact. */
   hitStopTimer = 0
+  /** How slow that freeze runs — set per-trigger by triggerHitStop(). */
+  hitStopScale = HITSTOP_SCALE
   highScore = readHighScore()
   isNewHighScore = false
 
@@ -201,13 +216,57 @@ export class GameEngine {
   /** Set while a modal owns the screen; the world freezes but still renders. */
   paused = false
 
+  // Tutorial ------------------------------------------------------------
+  // Runs inside the normal 'playing' phase rather than a separate one, so
+  // all the ordinary physics/render/HUD code just works unmodified; the
+  // tutorial layer only watches state and nudges it. Four phases —
+  // TUTORIAL_PHASES — each ending in success, never a forced rewind: a
+  // failure revives the player in place (undoing its cost) and, if a fixed
+  // target got missed, hops the target forward into reach instead.
+  tutorialActive = false
+  tutorialPhaseIndex = 0
+  /** Counts down the closing "you're ready" note before handing off. */
+  private tutorialStepTimer = 0
+  private tutorialSwingReps = 0
+  /** True for exactly one frame after a release, so a hook staying
+   *  attached across many frames can't be counted as several reps. */
+  private tutorialWasAttached = false
+  /** Hearts value a mid-phase "hit" gets quietly restored to — the cost is
+   *  undone rather than the player being sent back anywhere. */
+  private tutorialSafeHearts = MAX_HEARTS
+  /** The guaranteed teaching objects — each placed lazily, right as its own
+   *  phase begins, so nothing shows up before it's actually relevant. */
+  private tutorialMonster: Monster | null = null
+  private tutorialMushroom: Mushroom | null = null
+  private tutorialHeart: HeartPickup | null = null
+  /** Current handwritten note, or '' when nothing is showing. Gameplay is
+   *  never frozen for it — it just sits for a while and fades (see
+   *  TUTORIAL_HINT_DURATION / TUTORIAL_HINT_FADE) and only comes back if
+   *  the player fails the thing it was teaching. */
+  tutorialHintText = ''
+  /** Counts down the current note's remaining hold time; the render layer
+   *  fades it out over the last TUTORIAL_HINT_FADE seconds of this. */
+  tutorialHintTimer = 0
+  /** Queued note + duration that takes over automatically the instant the
+   *  current one's hold time elapses — chains a "Nice!" into the next
+   *  phase's instruction without freezing anything in between. */
+  private tutorialHintNextText = ''
+  private tutorialHintNextDuration = 0
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------
 
-  start() {
-    this.world.reset()
+  start(seed?: number) {
+    this.world.reset(seed)
     this.particles.clear()
+    this.tutorialActive = false
+    this.tutorialHintText = ''
+    this.tutorialHintTimer = 0
+    this.tutorialHintNextText = ''
+    this.tutorialMonster = null
+    this.tutorialMushroom = null
+    this.tutorialHeart = null
 
     this.player = {
       x: PLAYER_START_X,
@@ -240,6 +299,7 @@ export class GameEngine {
     this.iframeTime = 0
     this.crashTimer = 0
     this.hitStopTimer = 0
+    this.hitStopScale = HITSTOP_SCALE
     this.isNewHighScore = false
     this.shake = 0
     this.flash = 0
@@ -260,6 +320,25 @@ export class GameEngine {
     this.publishHud(true)
   }
 
+  /** Same run setup as start(), plus a fixed layout and a four-phase guided
+   *  script — see TUTORIAL_PHASES and updateTutorial(). Nothing is placed
+   *  upfront: each phase's teaching object appears only once that phase
+   *  actually begins, so nothing shows up before it's relevant. */
+  startTutorial() {
+    this.start(TUTORIAL_SEED)
+    this.tutorialActive = true
+    this.tutorialPhaseIndex = 0
+    this.tutorialStepTimer = 0
+    this.tutorialSwingReps = 0
+    this.tutorialWasAttached = false
+    this.tutorialSafeHearts = this.hearts
+    this.tutorialMonster = null
+    this.tutorialMushroom = null
+    this.tutorialHeart = null
+    this.showTutorialHint(TUTORIAL_INSTRUCTIONS.swing)
+    this.publishHud(true)
+  }
+
   // -------------------------------------------------------------------------
   // Input
   // -------------------------------------------------------------------------
@@ -276,9 +355,9 @@ export class GameEngine {
     this.releaseHook()
   }
 
-  /** Pick the most useful lantern ahead and fire the rope at it. */
-  private castHook() {
-    if (this.hook.state !== 'idle') return
+  /** The lantern castHook() would grab right now, if any — shared with the
+   *  tutorial's "point the arrow at it" logic so both always agree. */
+  private findBestAnchor(): Anchor | null {
     const p = this.player
     const candidates = this.world.anchorsNear(p.x, HOOK_RANGE_AHEAD + 200)
 
@@ -299,6 +378,14 @@ export class GameEngine {
         best = a
       }
     }
+    return best
+  }
+
+  /** Pick the most useful lantern ahead and fire the rope at it. */
+  private castHook() {
+    if (this.hook.state !== 'idle') return
+    const p = this.player
+    const best = this.findBestAnchor()
 
     if (!best) {
       // Nothing in reach — a little puff of effort so the input still reads.
@@ -351,16 +438,26 @@ export class GameEngine {
     if (this.paused) return
     // Clamp so an alt-tab pause can never tunnel the player through the world.
     const realDt = Math.min(rawDt, 1 / 30)
+
     if (this.hitStopTimer > 0) this.hitStopTimer = Math.max(0, this.hitStopTimer - realDt)
-    // A stomp/smash freezes motion almost to a stop for a couple of frames —
-    // a classic "impact frame" that sells the hit without slowing the whole game.
-    const effectiveScale = this.hitStopTimer > 0 ? HITSTOP_SCALE : this.timeScale
+    // Impact moments (stomps, hits, falls) freeze motion almost to a stop for
+    // a beat — a classic "impact frame" that sells the hit without slowing
+    // the whole game. Intensity varies per trigger — see triggerHitStop().
+    const effectiveScale = this.hitStopTimer > 0 ? this.hitStopScale : this.timeScale
     const dt = realDt * effectiveScale
     this.time += dt
 
     if (this.phase === 'menu') {
       this.updateMenu(dt)
       return
+    }
+
+    // Safety net: the guided phases revive on any heart loss before the run
+    // could ever actually end (see updateTutorial), but if some edge case
+    // slips through, land here rather than actually ending the tutorial run.
+    if (this.tutorialActive && this.phase === 'crashing') {
+      this.phase = 'playing'
+      this.tutorialRevive()
     }
 
     if (this.phase === 'crashing') {
@@ -405,6 +502,7 @@ export class GameEngine {
 
     this.updateCamera(dt)
     this.particles.update(dt)
+    if (this.tutorialActive) this.updateTutorial(dt)
 
     this.hudTimer += dt
     if (this.hudTimer > 0.06) this.publishHud()
@@ -643,6 +741,8 @@ export class GameEngine {
       this.particles.ring(p.x, GROUND_Y - 8, 'rgba(160,255,150,0.85)', 24, 3.4, 0.4)
       this.squashFrom(Math.PI / 2, 0.55)
       this.shake = Math.max(this.shake, 8)
+      // Light touch — this bounce is a reward, not a penalty.
+      this.triggerHitStop(0.05, 0.25)
       audio.groundBounce()
       return
     }
@@ -660,6 +760,7 @@ export class GameEngine {
       this.shake = Math.max(this.shake, 14)
       this.flash = 0.35
       this.flashColor = '#ffd166'
+      this.triggerHitStop(0.1, 0.18)
       audio.groundBounce()
       audio.hurt()
       this.publishHud(true)
@@ -682,6 +783,9 @@ export class GameEngine {
     this.shake = 22
     this.flash = 0.7
     this.flashColor = '#ff8b6b'
+    // A sharp, dramatic freeze right at the instant the run ends, before
+    // easing into the longer tumble slow-motion updateCrash() ramps up.
+    this.triggerHitStop(0.16, 0.06)
     this.particles.impactStars(p.x, p.y, 14, '#ff9f68')
     this.particles.dustPuff(p.x, p.y, 18, 'rgba(255,240,215,0.9)', 320)
     this.particles.popup(p.x, p.y - 80, 'OUCH!', '#ff8b6b', true, 40)
@@ -711,8 +815,10 @@ export class GameEngine {
             // Stomped: squashes flat under the impact, then actually falls —
             // real accelerating gravity, no floor, no easing to a fixed
             // point — so it visibly plummets and drops away out of view
-            // (Doodle Jump-style) instead of just fading in place.
-            m.vy += GRAVITY * 1.15 * dt
+            // (Doodle Jump-style) instead of fading out while still on
+            // screen. Gentle enough that the fall itself stays visible for
+            // a beat rather than snapping out of view immediately.
+            m.vy += GRAVITY * 0.8 * dt
             m.y += m.vy * dt
             m.squash = Math.min(1, m.squash + dt * 9)
           }
@@ -876,7 +982,7 @@ export class GameEngine {
     m.squash = 0.4 // already visibly compressed the instant the weight lands
     m.spin = 0
     m.vx = 0
-    m.vy = 0
+    m.vy = 90 // a little starting pop so the fall reads immediately, not a slow drift
     this.monstersStomped++
     this.bumpCombo()
 
@@ -888,8 +994,8 @@ export class GameEngine {
     // than either alone.
     p.vy = STOMP_BOUNCE_VY
     this.squashFrom(Math.PI / 2, 0.68)
-    // A one-or-two-frame freeze on the impact itself sells the weight of it.
-    this.hitStopTimer = HITSTOP_DURATION
+    // The longest, heaviest hitstop of any impact — the game's signature beat.
+    this.triggerHitStop(HITSTOP_DURATION, HITSTOP_SCALE)
 
     this.particles.impactStars(m.x, m.y - 10, 13, '#ffd166')
     this.particles.dustPuff(m.x, m.y + 8, 14, 'rgba(255,250,235,0.9)', 280)
@@ -918,6 +1024,7 @@ export class GameEngine {
     this.particles.sparkleBurst(m.x, m.y, 10, '#c9ffd4', 260, 9)
     this.particles.popup(m.x, m.y - 44, `SMASH +${gained}`, '#8bf59a', true, 28)
     this.shake = Math.max(this.shake, 9)
+    this.triggerHitStop(0.05, 0.12)
     audio.smash()
   }
 
@@ -925,6 +1032,16 @@ export class GameEngine {
     const p = this.player
     this.hearts -= 1
     this.resetCombo()
+
+    // The monster that hit you is removed immediately — otherwise the same
+    // monster can end up "stomped" moments later during the knockback arc,
+    // which reads as a confusing double interaction with the thing that
+    // just hurt you. No score for it: this is a consequence, not a win.
+    m.dead = true
+    m.deadTime = 0
+    m.spin = 0.001
+    m.vx = (m.x > p.x ? 1 : -1) * (200 + Math.random() * 140)
+    m.vy = -300 - Math.random() * 120
 
     if (this.hearts <= 0) {
       this.hearts = 0
@@ -937,6 +1054,9 @@ export class GameEngine {
     p.vx = Math.max(90, p.vx * 0.45) + (p.x < m.x ? HURT_KNOCKBACK_VX : -HURT_KNOCKBACK_VX) * 0.4
     this.releaseHook()
     this.squashFrom(Math.atan2(p.y - m.y, p.x - m.x), 0.5)
+    // Real, but a notch shorter and lighter than a stomp's — landing a
+    // stomp is the moment the game most wants to feel heavy.
+    this.triggerHitStop(0.05, 0.13)
 
     this.particles.impactStars(p.x, p.y, 7, '#ff9f68')
     this.particles.popup(p.x, p.y - 60, '-1', '#ff8b8b', true, 32)
@@ -944,6 +1064,228 @@ export class GameEngine {
     this.flash = 0.45
     this.flashColor = '#ff7a6b'
     audio.hurt()
+    this.publishHud(true)
+  }
+
+  // -------------------------------------------------------------------------
+  // Tutorial
+  // -------------------------------------------------------------------------
+
+  /** Shows a handwritten note for `duration` seconds, then lets it fade.
+   *  When `nextText` is given, that note takes over automatically — for
+   *  its own `nextDuration` — the instant this one's hold time elapses, so
+   *  a "Nice!" acknowledgement can chain straight into the next phase's
+   *  instruction without ever freezing gameplay in between. */
+  private showTutorialHint(
+    text: string,
+    duration = TUTORIAL_HINT_DURATION,
+    nextText = '',
+    nextDuration = TUTORIAL_HINT_DURATION,
+  ) {
+    this.tutorialHintText = text
+    this.tutorialHintTimer = duration
+    this.tutorialHintNextText = nextText
+    this.tutorialHintNextDuration = nextDuration
+  }
+
+  /** Checked every frame while tutorialActive. Gameplay is never frozen:
+   *  every guided phase ends in success, never a forced rewind — a heart
+   *  lost (a hit, or a hard fall triggering the normal ground-save) is
+   *  quietly undone in place, a soft landing with nothing to hook gets a
+   *  gentle nudge back into the air, and a missed fixed target hops
+   *  forward into reach — the player is never sent backward to retry
+   *  anything. Each of those failure paths also brings the instruction
+   *  note back if it had already faded. */
+  private updateTutorial(dt: number) {
+    const p = this.player
+    const phase = TUTORIAL_PHASES[this.tutorialPhaseIndex]
+
+    if (this.tutorialHintTimer > 0) {
+      this.tutorialHintTimer = Math.max(0, this.tutorialHintTimer - dt)
+      if (this.tutorialHintTimer === 0) {
+        if (this.tutorialHintNextText) {
+          this.tutorialHintText = this.tutorialHintNextText
+          this.tutorialHintTimer = this.tutorialHintNextDuration
+          this.tutorialHintNextText = ''
+        } else {
+          this.tutorialHintText = ''
+        }
+      }
+    }
+
+    if (phase === 'done') {
+      this.tutorialStepTimer -= dt
+      if (this.tutorialStepTimer <= 0) this.finishTutorial()
+      return
+    }
+
+    if (this.hearts < this.tutorialSafeHearts) {
+      this.tutorialRevive()
+      return
+    }
+    if (this.hook.state === 'idle' && p.y + PLAYER_RADIUS >= GROUND_Y - 2) {
+      this.tutorialGroundBounce()
+    }
+
+    switch (phase) {
+      case 'swing': {
+        if (this.hook.state === 'attached') {
+          this.tutorialWasAttached = true
+        } else if (this.hook.state === 'idle' && this.tutorialWasAttached) {
+          this.tutorialWasAttached = false
+          if (p.vx > PLAYER_START_VX * 0.5) {
+            this.tutorialSwingReps++
+            this.particles.popup(p.x, p.y - 50, `${this.tutorialSwingReps}/${TUTORIAL_SWING_REPS}`, '#ffd166', true, 24)
+            if (this.tutorialSwingReps >= TUTORIAL_SWING_REPS) this.advanceTutorialPhase(1, 'Great swinging!')
+          }
+        }
+        break
+      }
+      case 'stomp': {
+        const m = this.tutorialMonster
+        if (m?.dead) {
+          this.advanceTutorialPhase(2, 'Nice STOMP!')
+        } else if (m && (p.x - m.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+          this.relocateTutorialTarget('monster')
+        }
+        break
+      }
+      case 'mushroom': {
+        const mu = this.tutorialMushroom
+        if (mu?.taken) {
+          this.advanceTutorialPhase(3, 'Invincible!')
+        } else if (mu && (p.x - mu.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+          this.relocateTutorialTarget('mushroom')
+        }
+        break
+      }
+      case 'heart': {
+        const h = this.tutorialHeart
+        if (h?.taken) {
+          this.advanceTutorialPhase(4)
+        } else if (h && (p.x - h.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS) {
+          this.relocateTutorialTarget('heart')
+        }
+        break
+      }
+    }
+  }
+
+  /** Moves the tutorial to its next phase, right away — gameplay keeps
+   *  running the whole time. When a celebrateText is given, that "Nice!"
+   *  note shows first (TUTORIAL_CELEBRATE_DURATION) and then automatically
+   *  chains into the new phase's instruction, which then sits and fades on
+   *  its own like any other note (see showTutorialHint()). The new phase's
+   *  teaching object is placed only now, at the player's current position,
+   *  so nothing exists before this exact moment. */
+  private advanceTutorialPhase(next: number, celebrateText?: string) {
+    this.tutorialPhaseIndex = next
+    // New baseline for the "hearts dropped" check above — each phase only
+    // ever undoes damage taken *during* itself.
+    this.tutorialSafeHearts = this.hearts
+    const phase = TUTORIAL_PHASES[next]
+
+    const aheadX = this.player.x + TUTORIAL_PLACE_AHEAD_METERS * PX_PER_METER
+    if (phase === 'stomp') this.tutorialMonster = this.world.placeMonsterAt(aheadX, 'slime')
+    else if (phase === 'mushroom') this.tutorialMushroom = this.world.placeMushroomAt(aheadX)
+    else if (phase === 'heart') this.tutorialHeart = this.world.placeHeartAt(aheadX)
+
+    if (phase === 'done') {
+      this.tutorialStepTimer = TUTORIAL_DONE_DURATION
+      this.showTutorialHint(TUTORIAL_INSTRUCTIONS.done, TUTORIAL_DONE_DURATION)
+    } else if (celebrateText) {
+      this.showTutorialHint(celebrateText, TUTORIAL_CELEBRATE_DURATION, TUTORIAL_INSTRUCTIONS[phase])
+    } else {
+      this.showTutorialHint(TUTORIAL_INSTRUCTIONS[phase])
+    }
+    audio.comboUp(0)
+    this.publishHud(true)
+  }
+
+  /** Quietly undoes whatever just cost a heart and lets the player keep
+   *  going from exactly where they are — the "unlimited attempts, never
+   *  sent back" behaviour for getting hit or hitting the ground hard. */
+  private tutorialRevive() {
+    const p = this.player
+    this.hearts = this.tutorialSafeHearts
+    this.iframeTime = 0.6
+    this.resetCombo()
+    this.releaseHook()
+    if (p.vy > -100) p.vy = -260 // pop back into the air if they were falling/settled
+
+    const m = this.tutorialMonster
+    if (m?.dead) {
+      m.dead = false
+      m.deadTime = 0
+      m.squash = 0
+      m.spin = 0
+      m.x = m.homeX
+      m.y = m.homeY
+      m.vy = 0
+    }
+
+    this.flash = 0.25
+    this.flashColor = '#ffb347'
+    this.shake = Math.max(this.shake, 6)
+    this.particles.popup(p.x, p.y - 60, 'Try again!', '#ffb347', true, 26)
+    audio.uiClick()
+
+    // Bring the note back — it had likely already faded by the time this
+    // phase's own mistake happened.
+    const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
+    if (retryText) this.showTutorialHint(retryText)
+
+    this.publishHud(true)
+  }
+
+  /** A soft landing with nothing left to hook onto would otherwise strand
+   *  the player — a small bounce keeps practice flowing without a heart
+   *  cost or any of the drama of a real ground save. */
+  private tutorialGroundBounce() {
+    const p = this.player
+    p.vy = GROUND_BOUNCE_VY * 0.55
+    this.iframeTime = Math.max(this.iframeTime, 0.4)
+    this.particles.dustPuff(p.x, GROUND_Y, 10, 'rgba(255,250,230,0.85)', 220)
+    this.shake = Math.max(this.shake, 8)
+    audio.groundBounce()
+
+    // Falling with nothing hooked during the swing phase is exactly the
+    // thing that note is teaching — bring it back if it had faded.
+    if (TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'swing') {
+      this.showTutorialHint(TUTORIAL_RETRY_INSTRUCTIONS.swing ?? TUTORIAL_INSTRUCTIONS.swing)
+    }
+  }
+
+  /** A fixed target the player overshot hops forward into reach instead of
+   *  ever pulling the player back to retry it. */
+  private relocateTutorialTarget(kind: 'monster' | 'mushroom' | 'heart') {
+    const aheadX = this.player.x + TUTORIAL_RELOCATE_METERS * PX_PER_METER
+    if (kind === 'monster' && this.tutorialMonster) {
+      const m = this.tutorialMonster
+      m.x = aheadX
+      m.homeX = aheadX
+      m.dead = false
+      m.deadTime = 0
+      m.squash = 0
+      m.spin = 0
+      m.vy = 0
+    } else if (kind === 'mushroom' && this.tutorialMushroom) {
+      this.tutorialMushroom.x = aheadX
+      this.tutorialMushroom.taken = false
+    } else if (kind === 'heart' && this.tutorialHeart) {
+      this.tutorialHeart.x = aheadX
+      this.tutorialHeart.taken = false
+    }
+
+    const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
+    if (retryText) this.showTutorialHint(retryText)
+  }
+
+  private finishTutorial() {
+    this.tutorialActive = false
+    this.tutorialHintText = ''
+    this.tutorialHintTimer = 0
+    this.tutorialHintNextText = ''
     this.publishHud(true)
   }
 
@@ -981,6 +1323,14 @@ export class GameEngine {
   private squashFrom(angle: number, amount: number) {
     this.player.squashAngle = angle
     this.player.squash = Math.max(this.player.squash, amount)
+  }
+
+  /** Brief slow-motion freeze on an impact. `Math.max` on the timer so an
+   *  overlapping trigger (e.g. a hit landing mid-hitstop) never cuts a
+   *  longer freeze short. */
+  private triggerHitStop(duration: number, scale: number) {
+    if (duration >= this.hitStopTimer) this.hitStopScale = scale
+    this.hitStopTimer = Math.max(this.hitStopTimer, duration)
   }
 
   private updateCosmetics(dt: number) {
@@ -1079,6 +1429,7 @@ export class GameEngine {
       monstersStomped: this.monstersStomped,
       bestCombo: this.bestCombo,
       swinging: this.hook.state === 'attached',
+      tutorialActive: this.tutorialActive,
     })
   }
 }

@@ -109,4 +109,8 @@ export interface HudState {
   monstersStomped: number
   bestCombo: number
   swinging: boolean
+  /** Set while a guided tutorial run is in progress — the instruction text
+   *  itself is drawn directly on the canvas (see render/tutorial.ts), so
+   *  the DOM layer only needs to know whether to show the skip button. */
+  tutorialActive: boolean
 }

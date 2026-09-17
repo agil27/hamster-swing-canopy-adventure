@@ -232,6 +232,15 @@ function SpeakerOff() {
   )
 }
 
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden>
+      <rect x="5" y="4" width="5" height="16" rx="1.5" />
+      <rect x="14" y="4" width="5" height="16" rx="1.5" />
+    </svg>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Root HUD
 //
@@ -247,9 +256,10 @@ interface Props {
   muted: boolean
   onToggleMute: () => void
   onHelp: () => void
+  onPause: () => void
 }
 
-export default function Hud({ hud, muted, onToggleMute, onHelp }: Props) {
+export default function Hud({ hud, muted, onToggleMute, onHelp, onPause }: Props) {
   const playing = hud.phase === 'playing' || hud.phase === 'crashing'
 
   return (
@@ -301,6 +311,11 @@ export default function Hud({ hud, muted, onToggleMute, onHelp }: Props) {
             <IconButton onClick={onToggleMute} label={muted ? 'Unmute audio' : 'Mute audio'}>
               {muted ? <SpeakerOff /> : <SpeakerOn />}
             </IconButton>
+            {hud.phase === 'playing' && (
+              <IconButton onClick={onPause} label="Pause">
+                <PauseIcon />
+              </IconButton>
+            )}
             <IconButton onClick={onHelp} label="How to play">
               <span className="font-display text-xl font-extrabold leading-none">?</span>
             </IconButton>
@@ -327,8 +342,10 @@ export default function Hud({ hud, muted, onToggleMute, onHelp }: Props) {
       )}
 
       {/* Hold hint, shown only on the opening runway — pushed high enough
-          above the (now bigger) speedometer that they never overlap. */}
-      {playing && hud.distance < 22 && (
+          above the (now bigger) speedometer that they never overlap.
+          Suppressed during the tutorial, which shows its own step-specific
+          instruction in this exact slot instead. */}
+      {playing && hud.distance < 22 && !hud.tutorialActive && (
         <div
           className="absolute inset-x-0 flex justify-center px-4"
           style={{ bottom: 'calc(11rem + env(safe-area-inset-bottom, 0px))' }}

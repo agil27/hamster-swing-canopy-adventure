@@ -4,9 +4,10 @@ interface Props {
   highScore: number
   onPlay: () => void
   onHelp: () => void
+  onTutorial: () => void
 }
 
-export default function StartScreen({ highScore, onPlay, onHelp }: Props) {
+export default function StartScreen({ highScore, onPlay, onHelp, onTutorial }: Props) {
   return (
     <div
       data-ui-block
@@ -34,6 +35,9 @@ export default function StartScreen({ highScore, onPlay, onHelp }: Props) {
         <div className="mt-6 flex w-full flex-col items-center gap-3 sm:flex-row sm:justify-center">
           <button type="button" onClick={onPlay} className="btn-candy w-full px-10 text-xl sm:w-auto">
             ▶ Start Swinging
+          </button>
+          <button type="button" onClick={onTutorial} className="btn-candy btn-candy-sky w-full px-8 sm:w-auto">
+            🎓 Tutorial
           </button>
           <button type="button" onClick={onHelp} className="btn-candy btn-candy-amber w-full px-8 sm:w-auto">
             How to Play

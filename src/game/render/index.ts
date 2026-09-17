@@ -3,6 +3,7 @@ import type { GameEngine } from '../engine'
 import { clamp } from '../rng'
 import { drawCanopy, drawClouds, drawForest, drawGround, drawSky, drawSpores } from './background'
 import { drawAnchor, drawHeartPickup, drawMonster, drawMushroom, drawPlayer, drawRope, drawSeed } from './entities'
+import { drawTutorialCallout } from './tutorial'
 
 export interface Viewport {
   /** Device-pixel size of the backing canvas. */
@@ -112,6 +113,10 @@ export function render(ctx: CanvasRenderingContext2D, engine: GameEngine, vp: Vi
   }
 
   drawVignette(ctx, gloom, engine.invincibleTime > 0)
+
+  // Drawn last so the handwritten note sits on top of everything, including
+  // the flash/vignette washes.
+  drawTutorialCallout(ctx, engine, time)
 
   ctx.restore()
 }

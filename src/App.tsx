@@ -3,7 +3,9 @@ import GameCanvas from './components/GameCanvas'
 import GameOverModal from './components/GameOverModal'
 import Hud from './components/Hud'
 import HowToPlay from './components/HowToPlay'
+import PauseModal from './components/PauseModal'
 import StartScreen from './components/StartScreen'
+import TutorialOverlay from './components/TutorialOverlay'
 import { audio } from './game/audio'
 import { MUTE_KEY } from './game/constants'
 import { GameEngine } from './game/engine'
@@ -25,6 +27,7 @@ export default function App() {
 
   const [hud, setHud] = useState<HudState | null>(null)
   const [showHelp, setShowHelp] = useState(false)
+  const [showPause, setShowPause] = useState(false)
   const [muted, setMuted] = useState(readMuted)
 
   // Wire the engine's HUD stream into React and build the attract-mode world.
@@ -39,9 +42,16 @@ export default function App() {
 
   // Freeze the simulation whenever a modal is up.
   useEffect(() => {
-    engine.paused = showHelp
-    if (showHelp) engine.pressUp()
-  }, [engine, showHelp])
+    engine.paused = showHelp || showPause
+    if (showHelp || showPause) engine.pressUp()
+  }, [engine, showHelp, showPause])
+
+  // Closing the pause modal for any reason other than "stayed paused" (i.e.
+  // the phase changed under it, e.g. a game-over firing while paused isn't
+  // possible today, but this keeps it from lingering into a menu/game-over).
+  useEffect(() => {
+    if (showPause && hud && hud.phase !== 'playing') setShowPause(false)
+  }, [showPause, hud])
 
   useEffect(() => {
     audio.setMuted(muted)
@@ -74,6 +84,13 @@ export default function App() {
     engine.start()
   }, [engine, muted])
 
+  const startTutorial = useCallback(() => {
+    audio.unlock()
+    audio.setMuted(muted)
+    setShowHelp(false)
+    engine.startTutorial()
+  }, [engine, muted])
+
   const toMenu = useCallback(() => {
     audio.uiClick()
     audio.stopMusic()
@@ -91,18 +108,50 @@ export default function App() {
     setShowHelp(true)
   }, [])
 
+  const openPause = useCallback(() => {
+    audio.uiClick()
+    setShowPause(true)
+  }, [])
+
+  const resumeFromPause = useCallback(() => {
+    audio.uiClick()
+    setShowPause(false)
+  }, [])
+
+  const restartFromPause = useCallback(() => {
+    setShowPause(false)
+    if (engine.tutorialActive) startTutorial()
+    else startRun()
+  }, [engine, startRun, startTutorial])
+
+  const menuFromPause = useCallback(() => {
+    setShowPause(false)
+    toMenu()
+  }, [toMenu])
+
   const phase = hud?.phase ?? 'menu'
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0e2415]">
-      <GameCanvas engine={engine} inputEnabled={phase === 'playing' && !showHelp} />
+      <GameCanvas engine={engine} inputEnabled={phase === 'playing' && !showHelp && !showPause} />
 
       {hud && phase !== 'menu' && (
-        <Hud hud={hud} muted={muted} onToggleMute={toggleMute} onHelp={openHelp} />
+        <Hud hud={hud} muted={muted} onToggleMute={toggleMute} onHelp={openHelp} onPause={openPause} />
+      )}
+
+      {hud && phase === 'playing' && <TutorialOverlay hud={hud} onSkip={startRun} />}
+
+      {showPause && (
+        <PauseModal
+          onResume={resumeFromPause}
+          onRestart={restartFromPause}
+          onMenu={menuFromPause}
+          isTutorial={hud?.tutorialActive ?? false}
+        />
       )}
 
       {phase === 'menu' && (
-        <StartScreen highScore={hud?.highScore ?? 0} onPlay={startRun} onHelp={openHelp} />
+        <StartScreen highScore={hud?.highScore ?? 0} onPlay={startRun} onHelp={openHelp} onTutorial={startTutorial} />
       )}
 
       {phase === 'gameover' && hud && (
