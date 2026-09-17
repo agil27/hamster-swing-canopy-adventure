@@ -72,6 +72,15 @@ export class World {
     for (let i = 0; i < CHUNKS_AHEAD + 1; i++) this.ensureChunk(i)
   }
 
+  /** Switches ambient generation back on for every chunk generated from
+   *  here on — used once the tutorial hands off to normal play. Chunks
+   *  already generated (a few ahead of the camera, per CHUNKS_AHEAD) stay
+   *  exactly as they were; only genuinely new ground follows normal
+   *  density from this point. */
+  setTutorialMode(on: boolean) {
+    this.tutorialMode = on
+  }
+
   /** Generate everything the camera can reach and prune what it cannot. */
   update(camX: number) {
     const first = Math.floor(camX / CHUNK_WIDTH)

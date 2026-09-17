@@ -114,6 +114,7 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-float-soft,
   .animate-heart-beat,
+  .animate-heart-heal,
   .animate-shimmer,
   .animate-badge-glow {
     animation: none !important;

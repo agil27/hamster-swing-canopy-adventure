@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { HudState } from '../game/types'
 import { COMBO_WINDOW, MAX_HEARTS, MUSHROOM_DURATION } from '../game/constants'
@@ -36,9 +36,25 @@ function Heart({ filled }: { filled: boolean }) {
   )
 }
 
-const Hearts = memo(function Hearts({ hearts }: { hearts: number }) {
+const Hearts = memo(function Hearts({ hearts, flashId }: { hearts: number; flashId: number }) {
+  // A heart heal is otherwise just a number ticking up — this plays a
+  // one-shot glow/pop on the whole row so the moment actually reads,
+  // especially the first time it happens in the tutorial.
+  const [flashing, setFlashing] = useState(false)
+  const seen = useRef(flashId)
+  useEffect(() => {
+    if (flashId === seen.current) return
+    seen.current = flashId
+    setFlashing(true)
+    const t = setTimeout(() => setFlashing(false), 700)
+    return () => clearTimeout(t)
+  }, [flashId])
+
   return (
-    <div className="flex items-center gap-1.5" aria-label={`${hearts} of ${MAX_HEARTS} hearts remaining`}>
+    <div
+      className={`flex items-center gap-1.5 ${flashing ? 'animate-heart-heal' : ''}`}
+      aria-label={`${hearts} of ${MAX_HEARTS} hearts remaining`}
+    >
       {Array.from({ length: MAX_HEARTS }, (_, i) => (
         <Heart key={i} filled={i < hearts} />
       ))}
@@ -271,7 +287,7 @@ export default function Hud({ hud, muted, onToggleMute, onHelp, onPause }: Props
       >
         {/* Hearts + score */}
         <div className="flex items-center justify-between gap-3 landscape:flex-col landscape:items-start landscape:justify-start landscape:gap-2">
-          <Hearts hearts={hud.hearts} />
+          <Hearts hearts={hud.hearts} flashId={hud.heartsFlashId} />
           <div className="hud-chip">
             <svg viewBox="0 0 24 24" className="h-5 w-5 text-[#ffd166]" fill="currentColor" aria-hidden>
               <path d="M12 2l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.1 6.1 20.2l1.2-6.6L2.5 9l6.6-.9L12 2z" />

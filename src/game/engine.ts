@@ -56,11 +56,17 @@ import {
   TUTORIAL_CELEBRATE_DURATION,
   TUTORIAL_CLUSTER_GAP_METERS,
   TUTORIAL_DONE_DURATION,
+  TUTORIAL_HEART_COLLECT_TEXT,
+  TUTORIAL_HEART_FALL_SUPPRESS_CAST,
+  TUTORIAL_HEART_FALL_TEXT,
   TUTORIAL_HINT_DURATION,
   TUTORIAL_INSTRUCTIONS,
   TUTORIAL_MISS_MARGIN_METERS,
   TUTORIAL_MUSHROOM_COUNT,
-  TUTORIAL_MUSHROOM_MONSTER_GAP_METERS,
+  TUTORIAL_MUSHROOM_SMASH_TARGET,
+  TUTORIAL_MUSHROOM_SMASH_TEXT,
+  TUTORIAL_MUSHROOM_WAVE_COUNT,
+  TUTORIAL_MUSHROOM_WAVE_GAP_METERS,
   TUTORIAL_PHASES,
   TUTORIAL_PLACE_AHEAD_METERS,
   TUTORIAL_RETRY_INSTRUCTIONS,
@@ -199,6 +205,9 @@ export class GameEngine {
   hitStopScale = HITSTOP_SCALE
   highScore = readHighScore()
   isNewHighScore = false
+  /** Bumped every time a heart pickup actually heals a lost heart — see
+   *  HudState.heartsFlashId. */
+  heartsFlashId = 0
 
   // Presentation ------------------------------------------------------------
   camX = 0
@@ -223,12 +232,24 @@ export class GameEngine {
   // Tutorial ------------------------------------------------------------
   // Runs inside the normal 'playing' phase rather than a separate one, so
   // all the ordinary physics/render/HUD code just works unmodified; the
-  // tutorial layer only watches state and nudges it. Four phases —
-  // TUTORIAL_PHASES — each ending in success, never a forced rewind: a
-  // failure revives the player in place (undoing its cost) and, if a fixed
-  // target got missed, hops the target forward into reach instead.
+  // tutorial layer only watches state and nudges it. Five phases —
+  // TUTORIAL_PHASES — each opening frozen for the player's own next press
+  // (see tutorialWaitingForInput), then ending only in success, never a
+  // forced rewind: a failure revives the player in place (undoing its
+  // cost) and, if a fixed target got missed, hops the target forward into
+  // reach instead.
   tutorialActive = false
   tutorialPhaseIndex = 0
+  /** True while a phase's opening instruction has the sim fully frozen,
+   *  waiting for the player's own next press — see pressDown() and
+   *  beginTutorialPhase(). Never used for a mid-phase retry note; those
+   *  stay non-blocking. */
+  tutorialWaitingForInput = false
+  /** Set alongside a queued celebrate→instruction chain (see
+   *  showTutorialHint()) to freeze the instant that chain lands on the
+   *  instruction — so the celebrate note itself still plays out live, and
+   *  only the phase's real opening note blocks on a press. */
+  private tutorialFreezeOnNext = false
   /** Counts down the closing "you're ready" note before handing off. */
   private tutorialStepTimer = 0
   private tutorialSwingReps = 0
@@ -238,20 +259,37 @@ export class GameEngine {
   /** Hearts value a mid-phase "hit" gets quietly restored to — the cost is
    *  undone rather than the player being sent back anywhere. */
   private tutorialSafeHearts = MAX_HEARTS
-  /** The guaranteed teaching objects — each placed only once its own
-   *  phase's note has finished showing (see tutorialPendingPlacement), so
-   *  nothing shows up before it's actually relevant, or while the note
-   *  introducing it is still on screen. Stomp and mushroom each spawn a
-   *  small cluster (landing/grabbing any one of them counts) rather than
-   *  a single all-or-nothing target — see TUTORIAL_STOMP_MONSTER_COUNT /
-   *  TUTORIAL_MUSHROOM_COUNT. tutorialMonsters doubles as the mushroom
-   *  phase's bonus "something to smash while invincible" monster too. */
+  /** The guaranteed teaching objects, spawned by beginTutorialPhase() the
+   *  instant the player's own press starts that phase (or, for a
+   *  miss-relocate mid-phase, once the retry note has had its say — see
+   *  tutorialPendingPlacement). Stomp and mushroom each spawn a small
+   *  cluster (landing/grabbing any one of them counts) rather than a
+   *  single all-or-nothing target — see TUTORIAL_STOMP_MONSTER_COUNT /
+   *  TUTORIAL_MUSHROOM_COUNT. Once the mushroom's grabbed, tutorialMonsters
+   *  is reused for the smash wave (see TUTORIAL_MUSHROOM_WAVE_COUNT). */
   private tutorialMonsters: Monster[] = []
   private tutorialMushrooms: Mushroom[] = []
   private tutorialHeart: HeartPickup | null = null
-  /** A phase whose teaching object hasn't spawned yet — it's waiting for
-   *  the current note to finish its hold-and-fade. Consumed the instant
-   *  tutorialHintText next goes back to '' (see updateTutorial()). */
+  /** True from the moment the mushroom's grabbed until the smash target's
+   *  met — tutorialMonsters is the wave during this window, not a stomp
+   *  cluster or a bonus prop. */
+  private tutorialMushroomWaveActive = false
+  /** True once the heart phase's scripted fall (see
+   *  TUTORIAL_HEART_FALL_SUPPRESS_CAST) has actually happened — guards
+   *  against replaying that whole intro narrative on some later, unrelated
+   *  heart loss during the same phase. */
+  private tutorialHeartIntroDone = false
+  /** Counts down at the very start of the heart phase — while positive,
+   *  pressDown() skips its own castHook(), so the player can't just hook
+   *  away from the scripted fall that phase opens with (see the file
+   *  header on tutorial.ts). */
+  private tutorialSuppressCastTime = 0
+  /** A phase whose teaching object hasn't spawned yet — waiting for the
+   *  current (non-blocking, auto-fading) note to finish. Only used for a
+   *  mid-phase miss-relocate and the heart phase's post-intro pickup;
+   *  never for a phase's own opening spawn, which is press-driven (see
+   *  beginTutorialPhase()). Consumed the instant tutorialHintText next
+   *  goes back to '' (see updateTutorial()). */
   private tutorialPendingPlacement: TutorialPhase | null = null
   /** Set the instant a stomp lands on one of tutorialMonsters, consumed at
    *  the very top of the next updateTutorial() tick — a real hit ALSO
@@ -270,17 +308,20 @@ export class GameEngine {
    *  must never show that note — nothing was actually hit. Consumed by
    *  tutorialRevive(). */
   private tutorialHitByMonster = false
-  /** Current handwritten note, or '' when nothing is showing. Gameplay is
-   *  never frozen for it — it just sits for a while and fades (see
-   *  TUTORIAL_HINT_DURATION / TUTORIAL_HINT_FADE) and only comes back if
-   *  the player fails the thing it was teaching. */
+  /** Current handwritten note, or '' when nothing is showing. A phase's
+   *  opening note stays up indefinitely (frozen, waiting for a press); any
+   *  other note just sits for a while and fades on its own (see
+   *  TUTORIAL_HINT_DURATION / TUTORIAL_HINT_FADE). */
   tutorialHintText = ''
-  /** Counts down the current note's remaining hold time; the render layer
-   *  fades it out over the last TUTORIAL_HINT_FADE seconds of this. */
+  /** Counts down the current note's remaining hold time (meaningless while
+   *  tutorialWaitingForInput — a frozen note doesn't tick); the render
+   *  layer fades the note out over the last TUTORIAL_HINT_FADE seconds of
+   *  this. */
   tutorialHintTimer = 0
   /** Queued note + duration that takes over automatically the instant the
    *  current one's hold time elapses — chains a "Nice!" into the next
-   *  phase's instruction without freezing anything in between. */
+   *  phase's instruction without freezing anything in between (until
+   *  tutorialFreezeOnNext says otherwise). */
   private tutorialHintNextText = ''
   private tutorialHintNextDuration = 0
 
@@ -292,12 +333,17 @@ export class GameEngine {
     this.world.reset(seed, tutorialMode)
     this.particles.clear()
     this.tutorialActive = false
+    this.tutorialWaitingForInput = false
+    this.tutorialFreezeOnNext = false
     this.tutorialHintText = ''
     this.tutorialHintTimer = 0
     this.tutorialHintNextText = ''
     this.tutorialMonsters = []
     this.tutorialMushrooms = []
     this.tutorialHeart = null
+    this.tutorialMushroomWaveActive = false
+    this.tutorialHeartIntroDone = false
+    this.tutorialSuppressCastTime = 0
     this.tutorialStompLanded = false
     this.tutorialHitByMonster = false
     this.tutorialPendingPlacement = null
@@ -354,12 +400,15 @@ export class GameEngine {
     this.publishHud(true)
   }
 
-  /** Same run setup as start(), plus a fixed layout and a four-phase guided
-   *  script — see TUTORIAL_PHASES and updateTutorial(). Nothing is placed
-   *  upfront: each phase's teaching object appears only once that phase
-   *  actually begins, so nothing shows up before it's relevant — and the
-   *  world itself generates no ambient seeds/hearts/mushrooms/monsters at
-   *  all while in tutorial mode, so nothing ever competes with it either. */
+  /** Same run setup as start(), plus a fixed layout and a five-phase guided
+   *  script — see TUTORIAL_PHASES and updateTutorial(). Every phase opens
+   *  frozen (see tutorialWaitingForInput) for the player's own press
+   *  before anything of it exists, so nothing shows up before it's
+   *  relevant, and nothing shows up while the player hasn't even read what
+   *  it's for. The world itself generates no ambient seeds/hearts/
+   *  mushrooms/monsters at all while in tutorial mode (see
+   *  world.setTutorialMode()), so nothing ever competes with it either —
+   *  right up until the tutorial hands off to normal play (finishTutorial()). */
   startTutorial() {
     this.start(TUTORIAL_SEED, true)
     this.tutorialActive = true
@@ -371,8 +420,12 @@ export class GameEngine {
     this.tutorialMonsters = []
     this.tutorialMushrooms = []
     this.tutorialHeart = null
+    this.tutorialMushroomWaveActive = false
+    this.tutorialHeartIntroDone = false
+    this.tutorialSuppressCastTime = 0
     this.tutorialStompLanded = false
     this.tutorialHitByMonster = false
+    this.tutorialWaitingForInput = true
     this.showTutorialHint(TUTORIAL_INSTRUCTIONS.swing)
     this.publishHud(true)
   }
@@ -383,7 +436,19 @@ export class GameEngine {
 
   pressDown() {
     if (this.phase !== 'playing') return
+    // A phase's opening note freezes everything until the player's own
+    // next press — this is that press. It both lifts the freeze AND kicks
+    // the phase off (spawning whatever it teaches) in the same call, so
+    // dismissing the note feels like just... starting to play.
+    if (this.tutorialActive && this.tutorialWaitingForInput) {
+      this.tutorialWaitingForInput = false
+      this.beginTutorialPhase()
+    }
     this.pressed = true
+    // The heart phase opens with a scripted fall — briefly suppressing
+    // casting here is what makes that fall actually happen instead of the
+    // player just hooking straight past it.
+    if (this.tutorialActive && this.tutorialSuppressCastTime > 0) return
     this.castHook()
   }
 
@@ -393,8 +458,7 @@ export class GameEngine {
     this.releaseHook()
   }
 
-  /** The lantern castHook() would grab right now, if any — shared with the
-   *  tutorial's "point the arrow at it" logic so both always agree. */
+  /** The lantern castHook() would grab right now, if any. */
   private findBestAnchor(): Anchor | null {
     const p = this.player
     const candidates = this.world.anchorsNear(p.x, HOOK_RANGE_AHEAD + 200)
@@ -476,6 +540,13 @@ export class GameEngine {
     if (this.paused) return
     // Clamp so an alt-tab pause can never tunnel the player through the world.
     const realDt = Math.min(rawDt, 1 / 30)
+
+    // A phase's opening note freezes the whole simulation — physics,
+    // gravity, everything — until the player's own next press lifts it
+    // (see pressDown()). No timer for this: they get exactly as long as
+    // they need to read, and nothing about the phase (including its
+    // teaching object) exists until they do.
+    if (this.tutorialActive && this.tutorialWaitingForInput) return
 
     if (this.hitStopTimer > 0) this.hitStopTimer = Math.max(0, this.hitStopTimer - realDt)
     // Impact moments (stomps, hits, falls) freeze motion almost to a stop for
@@ -946,6 +1017,7 @@ export class GameEngine {
           hp.taken = true
           if (this.hearts < MAX_HEARTS) {
             this.hearts++
+            this.heartsFlashId++
             this.particles.popup(hp.x, hp.y - 30, '+1 HEART', '#ff8fa8', true, 30)
           } else {
             this.score += HEART_FULL_BONUS
@@ -1120,30 +1192,39 @@ export class GameEngine {
    *  When `nextText` is given, that note takes over automatically — for
    *  its own `nextDuration` — the instant this one's hold time elapses, so
    *  a "Nice!" acknowledgement can chain straight into the next phase's
-   *  instruction without ever freezing gameplay in between. */
+   *  instruction without ever freezing gameplay in between — unless
+   *  `freezeOnNext` is set, in which case the moment that promotion
+   *  happens is also the moment tutorialWaitingForInput goes up, freezing
+   *  the sim right as the chained note takes over (see advanceTutorialPhase()). */
   private showTutorialHint(
     text: string,
     duration = TUTORIAL_HINT_DURATION,
     nextText = '',
     nextDuration = TUTORIAL_HINT_DURATION,
+    freezeOnNext = false,
   ) {
     this.tutorialHintText = text
     this.tutorialHintTimer = duration
     this.tutorialHintNextText = nextText
     this.tutorialHintNextDuration = nextDuration
+    this.tutorialFreezeOnNext = freezeOnNext
   }
 
-  /** Checked every frame while tutorialActive. Gameplay is never frozen:
-   *  every guided phase ends in success, never a forced rewind — a heart
-   *  lost (a hit, or a hard fall triggering the normal ground-save) is
-   *  quietly undone in place, a soft landing with nothing to hook gets a
-   *  gentle nudge back into the air, and a missed fixed target hops
-   *  forward into reach — the player is never sent backward to retry
-   *  anything. Each of those failure paths also brings the instruction
-   *  note back if it had already faded. */
+  /** Checked every frame while tutorialActive and not frozen (a frozen
+   *  phase-opening note never reaches this at all — see the freeze check
+   *  at the top of update()). Every guided phase ends in success, never a
+   *  forced rewind — a heart lost (a hit, or a hard fall triggering the
+   *  normal ground-save) is quietly undone in place, a soft landing with
+   *  nothing to hook gets a gentle nudge back into the air, and a missed
+   *  fixed target hops forward into reach — the player is never sent
+   *  backward to retry anything. */
   private updateTutorial(dt: number) {
     const p = this.player
     const phase = TUTORIAL_PHASES[this.tutorialPhaseIndex]
+
+    if (this.tutorialSuppressCastTime > 0) {
+      this.tutorialSuppressCastTime = Math.max(0, this.tutorialSuppressCastTime - dt)
+    }
 
     if (this.tutorialHintTimer > 0) {
       this.tutorialHintTimer = Math.max(0, this.tutorialHintTimer - dt)
@@ -1152,12 +1233,19 @@ export class GameEngine {
           this.tutorialHintText = this.tutorialHintNextText
           this.tutorialHintTimer = this.tutorialHintNextDuration
           this.tutorialHintNextText = ''
+          if (this.tutorialFreezeOnNext) {
+            // A celebrate→instruction chain landed on the instruction —
+            // that's this phase's real opening note, so it freezes here,
+            // same as any other phase start (see beginTutorialPhase()).
+            this.tutorialFreezeOnNext = false
+            this.tutorialWaitingForInput = true
+          }
         } else {
           this.tutorialHintText = ''
-          // The note just introducing (or re-introducing) this phase has
-          // fully gone — only now does its teaching object actually spawn,
-          // so the player can never reach it before ever seeing what it's
-          // for (see spawnPendingTutorialTarget()).
+          // A non-blocking note (a retry, or the heart phase's post-intro
+          // "now go grab one") has fully gone — only now does whatever it
+          // was waiting on actually spawn, so the player can never reach
+          // it before ever seeing what it's for.
           if (this.tutorialPendingPlacement) this.spawnPendingTutorialTarget()
         }
       }
@@ -1215,9 +1303,20 @@ export class GameEngine {
         break
       }
       case 'mushroom': {
+        if (this.tutorialMushroomWaveActive) {
+          // Landing/hit ambiguity doesn't apply here — while invincible,
+          // every collision resolves through smashMonster(), never a real
+          // hit, so a plain dead-count is unambiguous.
+          const smashed = this.tutorialMonsters.reduce((n, m) => n + (m.dead ? 1 : 0), 0)
+          if (smashed >= TUTORIAL_MUSHROOM_SMASH_TARGET) {
+            this.tutorialMushroomWaveActive = false
+            this.advanceTutorialPhase(3, 'Awesome smashing!')
+          }
+          break
+        }
         const mushrooms = this.tutorialMushrooms
         if (mushrooms.some((mu) => mu.taken)) {
-          this.advanceTutorialPhase(3, 'Invincible!')
+          this.beginMushroomSmashWave()
         } else if (
           mushrooms.length > 0 &&
           mushrooms.every((mu) => (p.x - mu.x) / PX_PER_METER > TUTORIAL_MISS_MARGIN_METERS)
@@ -1227,6 +1326,10 @@ export class GameEngine {
         break
       }
       case 'heart': {
+        // Before the scripted fall has actually happened, there's nothing
+        // to check yet — that fall (via the normal ground-save, undone as
+        // always by tutorialRevive()) is what drives this phase forward.
+        if (!this.tutorialHeartIntroDone) break
         const h = this.tutorialHeart
         if (h?.taken) {
           this.advanceTutorialPhase(4)
@@ -1238,15 +1341,15 @@ export class GameEngine {
     }
   }
 
-  /** Moves the tutorial to its next phase, right away — gameplay keeps
-   *  running the whole time. When a celebrateText is given, that "Nice!"
-   *  note shows first (TUTORIAL_CELEBRATE_DURATION) and then automatically
-   *  chains into the new phase's instruction, which then sits and fades on
-   *  its own like any other note (see showTutorialHint()). The new phase's
-   *  teaching object isn't placed yet — it only spawns once that whole note
-   *  sequence has actually faded away (see spawnPendingTutorialTarget()),
-   *  so the player can never stumble into it mid-sentence, before it was
-   *  ever explained. */
+  /** Moves the tutorial to its next phase. That phase's opening note
+   *  freezes the sim immediately, waiting for the player's own next press
+   *  (see tutorialWaitingForInput / pressDown() / beginTutorialPhase()) —
+   *  nothing about the new phase exists until then. The one exception is
+   *  'done', which just plays its closing note out live and hands off on
+   *  its own (see finishTutorial()). When a celebrateText is given, that
+   *  "Nice!" note plays out live first (TUTORIAL_CELEBRATE_DURATION,
+   *  nothing frozen — it's just an acknowledgement) and only the
+   *  instruction it chains into actually freezes. */
   private advanceTutorialPhase(next: number, celebrateText?: string) {
     this.tutorialPhaseIndex = next
     // New baseline for the "hearts dropped" check above — each phase only
@@ -1257,30 +1360,89 @@ export class GameEngine {
     this.tutorialMonsters = []
     this.tutorialMushrooms = []
     this.tutorialHeart = null
-    this.tutorialPendingPlacement = phase === 'stomp' || phase === 'mushroom' || phase === 'heart' ? phase : null
+    this.tutorialMushroomWaveActive = false
+    this.tutorialPendingPlacement = null
+    // Always set explicitly below (true only in the plain-instruction
+    // branch) — never left over from whatever it was before this call.
+    this.tutorialWaitingForInput = false
 
     if (phase === 'done') {
       this.tutorialStepTimer = TUTORIAL_DONE_DURATION
       this.showTutorialHint(TUTORIAL_INSTRUCTIONS.done, TUTORIAL_DONE_DURATION)
     } else if (celebrateText) {
-      this.showTutorialHint(celebrateText, TUTORIAL_CELEBRATE_DURATION, TUTORIAL_INSTRUCTIONS[phase])
+      this.showTutorialHint(celebrateText, TUTORIAL_CELEBRATE_DURATION, TUTORIAL_INSTRUCTIONS[phase], TUTORIAL_HINT_DURATION, true)
     } else {
+      this.tutorialWaitingForInput = true
       this.showTutorialHint(TUTORIAL_INSTRUCTIONS[phase])
     }
     audio.comboUp(0)
     this.publishHud(true)
   }
 
-  /** Spawns whatever tutorialPendingPlacement is waiting on, right where
-   *  the player actually is now that the note introducing it has finished
-   *  — always through the world's placeXAt() helpers, so the object lands
+  /** Kicks a phase off the instant the player's own press dismisses its
+   *  opening freeze — spawns whatever it teaches, right where the player
+   *  actually is now, through the world's placeXAt() helpers so it lands
    *  in the chunk that actually matches its position (see the note on
    *  relocateTutorialTarget() about why that matters). Stomp and mushroom
    *  each spawn a small cluster rather than one single target — landing
    *  or grabbing any one of them counts (see TUTORIAL_STOMP_MONSTER_COUNT /
-   *  TUTORIAL_MUSHROOM_COUNT). The mushroom phase also drops a bonus
-   *  monster a little further out, so there's something to smash through
-   *  and actually see the invincibility do something. */
+   *  TUTORIAL_MUSHROOM_COUNT). The heart phase instead sets up its
+   *  scripted fall — see the file header on tutorial.ts. */
+  private beginTutorialPhase() {
+    const phase = TUTORIAL_PHASES[this.tutorialPhaseIndex]
+    const baseX = this.player.x + TUTORIAL_PLACE_AHEAD_METERS * PX_PER_METER
+    const gap = TUTORIAL_CLUSTER_GAP_METERS * PX_PER_METER
+
+    if (phase === 'stomp') {
+      this.tutorialMonsters = []
+      for (let i = 0; i < TUTORIAL_STOMP_MONSTER_COUNT; i++) {
+        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+      }
+    } else if (phase === 'mushroom') {
+      this.tutorialMushrooms = []
+      for (let i = 0; i < TUTORIAL_MUSHROOM_COUNT; i++) {
+        this.tutorialMushrooms.push(this.world.placeMushroomAt(baseX + i * gap))
+      }
+    } else if (phase === 'heart') {
+      // A small guaranteed hop so there's always a real, visible fall to
+      // feel — not just an unnoticed settle if they happened to already be
+      // near the ground. Casting stays suppressed for a beat (see
+      // pressDown()) so they can't just hook straight past it.
+      this.releaseHook()
+      this.tutorialHeartIntroDone = false
+      this.tutorialSuppressCastTime = TUTORIAL_HEART_FALL_SUPPRESS_CAST
+      if (this.player.vy > -200) this.player.vy = -320
+    }
+    this.publishHud(true)
+  }
+
+  /** Once the mushroom's grabbed, tutorialMonsters is repurposed for a
+   *  short run of monsters right on the path — free to smash through
+   *  while invincible (see TUTORIAL_MUSHROOM_WAVE_COUNT). This note is
+   *  non-blocking: invincibility is already ticking, so freezing here
+   *  would just waste the window it's talking about. */
+  private beginMushroomSmashWave() {
+    this.tutorialMushrooms = []
+    this.tutorialMushroomWaveActive = true
+    const baseX = this.player.x + TUTORIAL_PLACE_AHEAD_METERS * PX_PER_METER
+    const gap = TUTORIAL_MUSHROOM_WAVE_GAP_METERS * PX_PER_METER
+    this.tutorialMonsters = []
+    for (let i = 0; i < TUTORIAL_MUSHROOM_WAVE_COUNT; i++) {
+      this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+    }
+    this.showTutorialHint(TUTORIAL_MUSHROOM_SMASH_TEXT)
+  }
+
+  /** Spawns whatever tutorialPendingPlacement is waiting on, right where
+   *  the player actually is now that the (non-blocking) note introducing
+   *  it has finished — a mid-phase miss-relocate (stomp/mushroom), or the
+   *  heart phase's pickup, which only ever spawns once its own
+   *  scripted-fall narrative has fully played out (see tutorialRevive()).
+   *  A phase's very first spawn is never routed through here — that's
+   *  press-driven, see beginTutorialPhase(). Always through the world's
+   *  placeXAt() helpers, so the object lands in the chunk that actually
+   *  matches its position (see the note on relocateTutorialTarget() about
+   *  why that matters). */
   private spawnPendingTutorialTarget() {
     const phase = this.tutorialPendingPlacement
     this.tutorialPendingPlacement = null
@@ -1298,13 +1460,6 @@ export class GameEngine {
       this.tutorialMushrooms = []
       for (let i = 0; i < TUTORIAL_MUSHROOM_COUNT; i++) {
         this.tutorialMushrooms.push(this.world.placeMushroomAt(baseX + i * gap))
-      }
-      // Only the mushrooms themselves were cleared on a miss-relocate (see
-      // relocateTutorialTarget) — if the bonus monster is still around from
-      // the initial spawn, leave it be rather than spawning a second one.
-      if (this.tutorialMonsters.length === 0) {
-        const monsterX = baseX + (TUTORIAL_MUSHROOM_COUNT - 1) * gap + TUTORIAL_MUSHROOM_MONSTER_GAP_METERS * PX_PER_METER
-        this.tutorialMonsters = [this.world.placeMonsterAt(monsterX, 'slime')]
       }
     } else if (phase === 'heart') {
       this.tutorialHeart = this.world.placeHeartAt(baseX)
@@ -1333,7 +1488,10 @@ export class GameEngine {
    *  earlier note to fade) undoes the heart just the same but stays quiet,
    *  so it can never masquerade as "the monster got you" and can never
    *  keep re-arming (and thus indefinitely postponing) a note that's
-   *  simply waiting to finish its own hold time. */
+   *  simply waiting to finish its own hold time. The heart phase's very
+   *  first heart loss is different again — it's the scripted fall that
+   *  phase opens with (see beginTutorialPhase()), so THIS is the one
+   *  moment a plain ground landing is itself the lesson. */
   private tutorialRevive() {
     const p = this.player
     this.tutorialUndoHeartLoss()
@@ -1341,11 +1499,12 @@ export class GameEngine {
 
     const hitByMonster = this.tutorialHitByMonster
     this.tutorialHitByMonster = false
+    const phase = TUTORIAL_PHASES[this.tutorialPhaseIndex]
 
     // Only resurrect monsters while still actually on the stomp phase —
     // once it's been won (see tutorialStompLanded), any stale dead
     // reference left in the array is no longer anyone's business.
-    if (TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'stomp') {
+    if (phase === 'stomp') {
       for (const m of this.tutorialMonsters) {
         if (!m.dead) continue
         m.dead = false
@@ -1364,8 +1523,16 @@ export class GameEngine {
     this.particles.popup(p.x, p.y - 60, 'Try again!', '#ffb347', true, 26)
     audio.uiClick()
 
-    if (hitByMonster) {
-      const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
+    if (phase === 'heart' && !this.tutorialHeartIntroDone) {
+      // Chains straight into "now go grab one" — the pickup itself only
+      // spawns once that whole sequence has faded (see
+      // spawnPendingTutorialTarget()), so it can't distract from either
+      // note while they're still making their point.
+      this.tutorialHeartIntroDone = true
+      this.tutorialPendingPlacement = 'heart'
+      this.showTutorialHint(TUTORIAL_HEART_FALL_TEXT, TUTORIAL_HINT_DURATION, TUTORIAL_HEART_COLLECT_TEXT, TUTORIAL_HINT_DURATION)
+    } else if (hitByMonster) {
+      const retryText = TUTORIAL_RETRY_INSTRUCTIONS[phase]
       if (retryText) this.showTutorialHint(retryText)
     }
 
@@ -1411,11 +1578,17 @@ export class GameEngine {
     if (retryText) this.showTutorialHint(retryText)
   }
 
+  /** Hands off to a normal, unscripted run: the world starts generating
+   *  ambient seeds/hearts/mushrooms/monsters again from here on (see
+   *  world.setTutorialMode()) — the player keeps their current position,
+   *  score and hearts, they just keep going as a real run. */
   private finishTutorial() {
     this.tutorialActive = false
+    this.tutorialWaitingForInput = false
     this.tutorialHintText = ''
     this.tutorialHintTimer = 0
     this.tutorialHintNextText = ''
+    this.world.setTutorialMode(false)
     this.publishHud(true)
   }
 
@@ -1560,6 +1733,7 @@ export class GameEngine {
       bestCombo: this.bestCombo,
       swinging: this.hook.state === 'attached',
       tutorialActive: this.tutorialActive,
+      heartsFlashId: this.heartsFlashId,
     })
   }
 }

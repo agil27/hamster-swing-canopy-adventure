@@ -113,4 +113,9 @@ export interface HudState {
    *  itself is drawn directly on the canvas (see render/tutorial.ts), so
    *  the DOM layer only needs to know whether to show the skip button. */
   tutorialActive: boolean
+  /** Bumped every time a heart pickup actually heals a lost heart — the
+   *  HUD watches this to play a one-shot glow/pop on the heart row (see
+   *  Hud.tsx), since `hearts` alone can't tell "just healed" from
+   *  "rendered the same value again". */
+  heartsFlashId: number
 }

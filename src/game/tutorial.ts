@@ -1,27 +1,31 @@
 /**
- * Tutorial script v3 — four hands-on phases, each with a canvas-drawn
- * handwritten instruction (no arrow, no modal — just a note).
+ * Tutorial script v4 — five hands-on phases (swing / stomp / mushroom /
+ * heart / done), each with a canvas-drawn handwritten instruction (no
+ * arrow, no modal — just a note).
  *
- * Gameplay is never frozen: an instruction note appears, sits for a few
- * seconds, then fades on its own so it never sits in the way of actually
- * playing. It only comes back if the player fails the thing it was
- * teaching — a miss, a hit, a fumbled swing — so repeat readers see it as
- * many times as they need and everyone else just gets on with it. A
- * success shows a brief "Nice!" note in the same spot before the next
- * phase's instruction (also auto-fading) takes over.
+ * Every phase opens frozen: the instruction note appears, gameplay stops
+ * completely, and a small pulsing "(tap to begin)" cue waits for the
+ * player's own next press — never a timer — before that phase's teaching
+ * object(s) spawn and physics resumes. That's deliberate: reading and
+ * doing never compete for the same moment, and the player decides when
+ * they're ready. Once a phase is under way, though, nothing freezes again
+ * for it — a miss or a hit just shows a brief, auto-fading retry note and
+ * lets the player keep going without ever blocking them.
  *
- * Pacing is otherwise entirely forgiving: a failure inside a phase just
- * revives the player in place (undoing the hit, no rewind) and lets them
- * keep going — the target itself hops back into reach if they overshoot
- * it, rather than the player ever being sent backward.
+ * A phase never ends in failure, only success, and never rewinds the
+ * player: a heart lost mid-phase (a hit, or a hard fall) is quietly undone
+ * in place, and an overshot fixed target hops forward into reach — a
+ * fresh spawn, never the player pulled backward.
  *
- * Each phase's teaching object (monster/mushroom/heart) is placed only once
- * that phase's own instruction note has had its say and faded away — never
- * upfront, and never while the note is still on screen — so reading and
- * doing never compete for the same moment, and the player can never reach
- * (or stomp) something before ever seeing what it was for. A miss follows
- * the same rule: the retry note shows first, and the target only reappears
- * once that fades too.
+ * Stomp and mushroom each spawn a small forgiving cluster (not just one
+ * target) so a miss on the first still leaves another right behind it.
+ * Landing the mushroom on top of that opens a short "smash wave" — a
+ * run of monsters right on the path, free to punch through while
+ * invincible, so the payoff is something to actually do, not just watch a
+ * timer. The heart phase opens with a scripted fall (hook-casting is
+ * briefly suppressed so the player can't dodge it) so "a hit costs one
+ * heart" is something they just felt, not just read, before the pickup
+ * that heals it back ever appears.
  */
 export type TutorialPhase = 'swing' | 'stomp' | 'mushroom' | 'heart' | 'done'
 
@@ -39,21 +43,38 @@ export const TUTORIAL_INSTRUCTIONS: Readonly<Record<TutorialPhase, string>> = {
  *  failed attempt at the same phase. The stomp one is only ever shown for
  *  an actual hit from the monster (see tutorialHitByMonster) — never for
  *  an unrelated heart loss, like a hard ground landing, that just happens
- *  to land during the same phase. */
+ *  to land during the same phase. The swing one is shown only for an
+ *  actual fall to the ground (see tutorialGroundBounce) — the one place a
+ *  ground touch itself is the thing being taught. */
 export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
-  swing: "Don't worry — hold again to hook the next lantern!",
+  swing: 'Oops, you touched the ground! Hold again to hook the next lantern.',
   stomp: 'Ouch! You got hit by the monster. Try again to stomp on the monster!',
   mushroom: 'Missed it — grab the next mushroom!',
   heart: 'Missed it — grab the next heart to heal up!',
 }
+
+/** Shown once, right after the mushroom is grabbed — invincibility is
+ *  already running, so this note just sits and fades on its own rather
+ *  than freezing anything (that would waste the window it's talking
+ *  about). */
+export const TUTORIAL_MUSHROOM_SMASH_TEXT = "You're invincible — smash through them all!"
+
+/** The heart phase's scripted intro: a note shown the instant the guided
+ *  fall costs (and immediately un-costs) its one heart, pointing the
+ *  player at the HUD before any pickup exists to distract from it. Chains
+ *  automatically into TUTORIAL_HEART_COLLECT_TEXT once it's had its say
+ *  (see TUTORIAL_HINT_DURATION) — the pickup itself only spawns once that
+ *  whole sequence has faded. */
+export const TUTORIAL_HEART_FALL_TEXT = 'Ouch! A hit costs one heart — look at your hearts up top!'
+export const TUTORIAL_HEART_COLLECT_TEXT = 'Now grab the floating heart to heal it back!'
 
 /** How many clean release-and-launch cycles count as "practiced" before
  *  the swing phase moves on. */
 export const TUTORIAL_SWING_REPS = 3
 
 /** How far ahead (metres) a phase's teaching object is placed, relative to
- *  the player's position the instant it actually spawns (once that phase's
- *  note has finished showing — see the file header). */
+ *  the player's position the instant the player's own press starts that
+ *  phase (see the file header). */
 export const TUTORIAL_PLACE_AHEAD_METERS = 10
 
 /** How many monsters the stomp phase spawns together (a small cluster
@@ -70,12 +91,26 @@ export const TUTORIAL_MUSHROOM_COUNT = 2
  *  cluster. */
 export const TUTORIAL_CLUSTER_GAP_METERS = 7
 
-/** How much further ahead (metres), beyond the mushroom cluster's last
- *  member, the mushroom phase's bonus monster spawns — close enough to
- *  reach well within the mushroom's invincibility window, so the player
- *  can smash straight through it and actually see what the mushroom
- *  does. */
-export const TUTORIAL_MUSHROOM_MONSTER_GAP_METERS = 9
+/** How many monsters line the path once the mushroom's invincibility
+ *  kicks in — more than the smash target itself, so there's real slack
+ *  even if a few are missed or run past. */
+export const TUTORIAL_MUSHROOM_WAVE_COUNT = 9
+
+/** How many of the wave actually need smashing before the mushroom phase
+ *  hands off to the heart phase. */
+export const TUTORIAL_MUSHROOM_SMASH_TARGET = 7
+
+/** Spacing (metres) between consecutive members of the smash wave — tight
+ *  enough that a straight run through the invincibility window reaches
+ *  the target count comfortably. */
+export const TUTORIAL_MUSHROOM_WAVE_GAP_METERS = 5
+
+/** How long hook-casting is suppressed at the very start of the heart
+ *  phase, forcing the scripted fall (see the file header) rather than
+ *  leaving it to chance that the player happens to touch the ground on
+ *  their own. Comfortably longer than a real fall takes from a standing
+ *  jump, so it never lingers once the fall's already happened. */
+export const TUTORIAL_HEART_FALL_SUPPRESS_CAST = 2.5
 
 /** How far past a target (metres) counts as "missed it, relocate" — for a
  *  cluster, this means past every member of it. A missed cluster's
@@ -88,14 +123,16 @@ export const TUTORIAL_MISS_MARGIN_METERS = 3
 /** Fixed so every tutorial run opens with the same forgiving lantern ladder. */
 export const TUTORIAL_SEED = 8675309
 
-/** How long an instruction (or retry) note stays up before it fades. */
+/** How long a retry (or the heart phase's scripted-intro) note stays up
+ *  before it fades on its own — phase-opening notes don't use this at
+ *  all, since those freeze indefinitely for the player's own press. */
 export const TUTORIAL_HINT_DURATION = 4.2
 
 /** How long the note takes to fade out once its hold time elapses. */
 export const TUTORIAL_HINT_FADE = 0.6
 
 /** How long a "Nice!" acknowledgement shows before the note switches over
- *  to the next phase's instruction. */
+ *  to the next phase's (frozen) instruction. */
 export const TUTORIAL_CELEBRATE_DURATION = 1.3
 
 /** How long the closing "you're ready" note lingers before handing off to

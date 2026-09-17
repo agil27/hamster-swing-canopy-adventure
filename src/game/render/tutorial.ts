@@ -19,19 +19,23 @@ const INSTRUCTION_TEXTS = new Set<string>([
  * of the (letterboxed, already-transformed) view — no arrow: it scrolls
  * and scales with the world, but doesn't try to point at anything.
  *
- * Gameplay never pauses for this: the engine holds the note up for a while
- * then lets it go, so the card fades out here over its last
- * TUTORIAL_HINT_FADE seconds rather than snapping away.
+ * A phase's opening note freezes the sim entirely (tutorialWaitingForInput)
+ * and stays fully visible with a small pulsing "(tap to begin)" cue below
+ * it, waiting for the player's own press — no timer, so it never fades on
+ * its own here either. Any other note — a retry, an acknowledgement — is
+ * non-blocking and fades out on its own over its last TUTORIAL_HINT_FADE
+ * seconds instead.
  */
 export function drawTutorialCallout(ctx: CanvasRenderingContext2D, engine: GameEngine, time: number) {
   if (!engine.tutorialActive) return
   const text = engine.tutorialHintText
   if (!text) return
 
-  const alpha = engine.tutorialHintTimer >= TUTORIAL_HINT_FADE ? 1 : engine.tutorialHintTimer / TUTORIAL_HINT_FADE
+  const waiting = engine.tutorialWaitingForInput
+  const alpha = waiting || engine.tutorialHintTimer >= TUTORIAL_HINT_FADE ? 1 : engine.tutorialHintTimer / TUTORIAL_HINT_FADE
   if (alpha <= 0) return
 
-  const celebrating = !INSTRUCTION_TEXTS.has(text)
+  const celebrating = !waiting && !INSTRUCTION_TEXTS.has(text)
 
   const noteX = VIEW_W / 2
   const noteY = 250 + Math.sin(time * 1.4) * 4
@@ -44,7 +48,7 @@ export function drawTutorialCallout(ctx: CanvasRenderingContext2D, engine: GameE
   const metrics = ctx.measureText(text)
   const padX = 34
   const boxW = Math.min(metrics.width + padX * 2, VIEW_W - 48)
-  const boxH = 64
+  const boxH = waiting ? 86 : 64
 
   ctx.translate(noteX, noteY)
   ctx.rotate(-0.025)
@@ -65,7 +69,15 @@ export function drawTutorialCallout(ctx: CanvasRenderingContext2D, engine: GameE
   ctx.stroke()
 
   ctx.fillStyle = celebrating ? CELEBRATE_INK : INK
-  ctx.fillText(text, 0, 0, boxW - padX)
+  ctx.fillText(text, 0, waiting ? -12 : 0, boxW - padX)
+
+  if (waiting) {
+    const pulse = 0.55 + 0.45 * Math.sin(time * 3.2)
+    ctx.font = "600 18px 'Caveat', cursive"
+    ctx.globalAlpha = alpha * pulse
+    ctx.fillStyle = '#ff6b4a'
+    ctx.fillText('(tap to begin)', 0, 22)
+  }
   ctx.restore()
 }
 
