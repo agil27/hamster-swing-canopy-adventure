@@ -13,8 +13,6 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
-      - key: VITE_GOOGLE_CLIENT_ID
-        sync: false
     # No persistent disk on the free plan — DB_PATH is left unset, so
     # server/db.js falls back to a path inside the app's own (ephemeral)
     # filesystem. That means accounts/scores reset on every deploy AND

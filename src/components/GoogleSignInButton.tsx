@@ -4,7 +4,7 @@ interface Props {
   onCredential: (idToken: string) => void
 }
 
-const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
+const CLIENT_ID = __GOOGLE_CLIENT_ID__
 
 /**
  * Renders Google's own "Sign in with Google" button via the Identity
