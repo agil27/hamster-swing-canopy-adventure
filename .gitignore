@@ -14,3 +14,9 @@ yarn-error.log*
 *.njsproj
 *.sln
 *.sw?
+
+# server
+server/data/
+.env
+.env.*
+!.env.example

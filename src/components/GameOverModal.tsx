@@ -1,10 +1,22 @@
 import type { HudState } from '../game/types'
 import HamsterMark from './HamsterMark'
 
+export type ScoreSaveStatus = 'idle' | 'saving' | 'saved' | 'error' | 'signedOut'
+
 interface Props {
   hud: HudState
   onRestart: () => void
   onMenu: () => void
+  onShowLeaderboard: () => void
+  saveStatus: ScoreSaveStatus
+}
+
+function SaveStatusLine({ status }: { status: ScoreSaveStatus }) {
+  if (status === 'saving') return <p className="mt-2 font-body text-xs font-bold text-[#8a6a4c]">Saving to leaderboard…</p>
+  if (status === 'saved') return <p className="mt-2 font-body text-xs font-bold text-[#2c6b3c]">✓ Saved to the leaderboard</p>
+  if (status === 'error') return <p className="mt-2 font-body text-xs font-bold text-[#b4522f]">Couldn't save your score — try again next run</p>
+  if (status === 'signedOut') return <p className="mt-2 font-body text-xs font-bold text-[#8a6a4c]">Sign in from the main menu to save scores</p>
+  return null
 }
 
 function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
@@ -18,7 +30,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   )
 }
 
-export default function GameOverModal({ hud, onRestart, onMenu }: Props) {
+export default function GameOverModal({ hud, onRestart, onMenu, onShowLeaderboard, saveStatus }: Props) {
   return (
     <div
       data-ui-block
@@ -76,6 +88,17 @@ export default function GameOverModal({ hud, onRestart, onMenu }: Props) {
 
         <div className="mt-3 text-center font-display text-sm font-bold text-[#8a6a4c]">
           Furthest tier reached: <span className="text-[#5b3a24]">{hud.tierName}</span>
+        </div>
+
+        <div className="text-center">
+          <SaveStatusLine status={saveStatus} />
+          <button
+            type="button"
+            onClick={onShowLeaderboard}
+            className="mt-1 font-display text-sm font-extrabold text-[#5b3a24] underline decoration-[#8a6a4c]/40 underline-offset-4"
+          >
+            🏆 View Leaderboard
+          </button>
         </div>
 
         <div className="mt-5 flex flex-col gap-2 sm:flex-row">

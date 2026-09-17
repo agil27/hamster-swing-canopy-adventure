@@ -1,3 +1,5 @@
+import type { AuthUser } from '../lib/api'
+import AccountBar from './AccountBar'
 import HamsterMark from './HamsterMark'
 
 interface Props {
@@ -5,9 +7,26 @@ interface Props {
   onPlay: () => void
   onHelp: () => void
   onTutorial: () => void
+  user: AuthUser | null
+  authLoading: boolean
+  onCredential: (idToken: string) => void
+  onSignOut: () => void
+  onRename: (name: string) => Promise<void>
+  onShowLeaderboard: () => void
 }
 
-export default function StartScreen({ highScore, onPlay, onHelp, onTutorial }: Props) {
+export default function StartScreen({
+  highScore,
+  onPlay,
+  onHelp,
+  onTutorial,
+  user,
+  authLoading,
+  onCredential,
+  onSignOut,
+  onRename,
+  onShowLeaderboard,
+}: Props) {
   return (
     <div
       data-ui-block
@@ -42,6 +61,18 @@ export default function StartScreen({ highScore, onPlay, onHelp, onTutorial }: P
           <button type="button" onClick={onHelp} className="btn-candy btn-candy-amber w-full px-8 sm:w-auto">
             How to Play
           </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={onShowLeaderboard}
+          className="mt-3 font-display text-sm font-extrabold text-white/80 underline decoration-white/40 underline-offset-4 hover:text-white"
+        >
+          🏆 View Leaderboard
+        </button>
+
+        <div className="mt-4">
+          <AccountBar user={user} loading={authLoading} onCredential={onCredential} onSignOut={onSignOut} onRename={onRename} />
         </div>
 
         {highScore > 0 && (

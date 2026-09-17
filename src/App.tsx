@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import GameCanvas from './components/GameCanvas'
 import GameOverModal from './components/GameOverModal'
+import type { ScoreSaveStatus } from './components/GameOverModal'
 import Hud from './components/Hud'
 import HowToPlay from './components/HowToPlay'
+import LeaderboardModal from './components/LeaderboardModal'
 import PauseModal from './components/PauseModal'
 import StartScreen from './components/StartScreen'
 import TutorialOverlay from './components/TutorialOverlay'
@@ -10,6 +12,8 @@ import { audio } from './game/audio'
 import { MUTE_KEY } from './game/constants'
 import { GameEngine } from './game/engine'
 import type { HudState } from './game/types'
+import { submitScore } from './lib/api'
+import { useAuth } from './lib/useAuth'
 
 function readMuted() {
   try {
@@ -28,7 +32,10 @@ export default function App() {
   const [hud, setHud] = useState<HudState | null>(null)
   const [showHelp, setShowHelp] = useState(false)
   const [showPause, setShowPause] = useState(false)
+  const [showLeaderboard, setShowLeaderboard] = useState(false)
   const [muted, setMuted] = useState(readMuted)
+  const [saveStatus, setSaveStatus] = useState<ScoreSaveStatus>('idle')
+  const auth = useAuth()
 
   // Wire the engine's HUD stream into React and build the attract-mode world.
   useEffect(() => {
@@ -42,9 +49,9 @@ export default function App() {
 
   // Freeze the simulation whenever a modal is up.
   useEffect(() => {
-    engine.paused = showHelp || showPause
-    if (showHelp || showPause) engine.pressUp()
-  }, [engine, showHelp, showPause])
+    engine.paused = showHelp || showPause || showLeaderboard
+    if (showHelp || showPause || showLeaderboard) engine.pressUp()
+  }, [engine, showHelp, showPause, showLeaderboard])
 
   // Closing the pause modal for any reason other than "stayed paused" (i.e.
   // the phase changed under it, e.g. a game-over firing while paused isn't
@@ -52,6 +59,27 @@ export default function App() {
   useEffect(() => {
     if (showPause && hud && hud.phase !== 'playing') setShowPause(false)
   }, [showPause, hud])
+
+  // Submit the run's score once, right as a game-over lands — reset the
+  // guard the moment a new run starts so the next game-over can submit too.
+  const submittedRef = useRef(false)
+  useEffect(() => {
+    const phase = hud?.phase ?? 'menu'
+    if (phase !== 'gameover') {
+      submittedRef.current = false
+      return
+    }
+    if (submittedRef.current || !hud) return
+    submittedRef.current = true
+    if (!auth.user) {
+      setSaveStatus('signedOut')
+      return
+    }
+    setSaveStatus('saving')
+    submitScore(hud.score, hud.distance)
+      .then(() => setSaveStatus('saved'))
+      .catch(() => setSaveStatus('error'))
+  }, [hud, auth.user])
 
   useEffect(() => {
     audio.setMuted(muted)
@@ -81,6 +109,7 @@ export default function App() {
     audio.unlock()
     audio.setMuted(muted)
     setShowHelp(false)
+    setSaveStatus('idle')
     engine.start()
   }, [engine, muted])
 
@@ -88,6 +117,7 @@ export default function App() {
     audio.unlock()
     audio.setMuted(muted)
     setShowHelp(false)
+    setSaveStatus('idle')
     engine.startTutorial()
   }, [engine, muted])
 
@@ -113,6 +143,32 @@ export default function App() {
     setShowPause(true)
   }, [])
 
+  const openLeaderboard = useCallback(() => {
+    audio.uiClick()
+    setShowLeaderboard(true)
+  }, [])
+
+  const closeLeaderboard = useCallback(() => {
+    audio.uiClick()
+    setShowLeaderboard(false)
+  }, [])
+
+  const handleCredential = useCallback(
+    (idToken: string) => {
+      auth.signInWithIdToken(idToken).catch(() => {
+        /* the sign-in button itself shows nothing changed; a real toast can follow if this comes up */
+      })
+    },
+    [auth],
+  )
+
+  const handleSignOut = useCallback(() => {
+    audio.uiClick()
+    auth.signOut().catch(() => {})
+  }, [auth])
+
+  const handleRename = useCallback((name: string) => auth.rename(name).then(() => undefined), [auth])
+
   const resumeFromPause = useCallback(() => {
     audio.uiClick()
     setShowPause(false)
@@ -133,7 +189,7 @@ export default function App() {
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#0e2415]">
-      <GameCanvas engine={engine} inputEnabled={phase === 'playing' && !showHelp && !showPause} />
+      <GameCanvas engine={engine} inputEnabled={phase === 'playing' && !showHelp && !showPause && !showLeaderboard} />
 
       {hud && phase !== 'menu' && (
         <Hud hud={hud} muted={muted} onToggleMute={toggleMute} onHelp={openHelp} onPause={openPause} />
@@ -151,14 +207,27 @@ export default function App() {
       )}
 
       {phase === 'menu' && (
-        <StartScreen highScore={hud?.highScore ?? 0} onPlay={startRun} onHelp={openHelp} onTutorial={startTutorial} />
+        <StartScreen
+          highScore={hud?.highScore ?? 0}
+          onPlay={startRun}
+          onHelp={openHelp}
+          onTutorial={startTutorial}
+          user={auth.user}
+          authLoading={auth.loading}
+          onCredential={handleCredential}
+          onSignOut={handleSignOut}
+          onRename={handleRename}
+          onShowLeaderboard={openLeaderboard}
+        />
       )}
 
       {phase === 'gameover' && hud && (
-        <GameOverModal hud={hud} onRestart={startRun} onMenu={toMenu} />
+        <GameOverModal hud={hud} onRestart={startRun} onMenu={toMenu} onShowLeaderboard={openLeaderboard} saveStatus={saveStatus} />
       )}
 
       {showHelp && <HowToPlay onClose={() => setShowHelp(false)} />}
+
+      {showLeaderboard && <LeaderboardModal currentUserName={auth.user?.name ?? null} onClose={closeLeaderboard} />}
     </div>
   )
 }
