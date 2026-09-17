@@ -56,11 +56,13 @@ import {
   TUTORIAL_CELEBRATE_DURATION,
   TUTORIAL_CLUSTER_GAP_METERS,
   TUTORIAL_DONE_DURATION,
+  TUTORIAL_FALL_TEXT,
   TUTORIAL_HEART_COLLECT_TEXT,
-  TUTORIAL_HEART_FALL_SUPPRESS_CAST,
   TUTORIAL_HEART_FALL_TEXT,
   TUTORIAL_HINT_DURATION,
+  TUTORIAL_HIT_INSTRUCTIONS,
   TUTORIAL_INSTRUCTIONS,
+  TUTORIAL_MISS_INSTRUCTIONS,
   TUTORIAL_MISS_MARGIN_METERS,
   TUTORIAL_MUSHROOM_COUNT,
   TUTORIAL_MUSHROOM_SMASH_TARGET,
@@ -69,7 +71,6 @@ import {
   TUTORIAL_MUSHROOM_WAVE_GAP_METERS,
   TUTORIAL_PHASES,
   TUTORIAL_PLACE_AHEAD_METERS,
-  TUTORIAL_RETRY_INSTRUCTIONS,
   TUTORIAL_SEED,
   TUTORIAL_STOMP_MONSTER_COUNT,
   TUTORIAL_SWING_REPS,
@@ -274,16 +275,6 @@ export class GameEngine {
    *  met — tutorialMonsters is the wave during this window, not a stomp
    *  cluster or a bonus prop. */
   private tutorialMushroomWaveActive = false
-  /** True once the heart phase's scripted fall (see
-   *  TUTORIAL_HEART_FALL_SUPPRESS_CAST) has actually happened — guards
-   *  against replaying that whole intro narrative on some later, unrelated
-   *  heart loss during the same phase. */
-  private tutorialHeartIntroDone = false
-  /** Counts down at the very start of the heart phase — while positive,
-   *  pressDown() skips its own castHook(), so the player can't just hook
-   *  away from the scripted fall that phase opens with (see the file
-   *  header on tutorial.ts). */
-  private tutorialSuppressCastTime = 0
   /** A phase whose teaching object hasn't spawned yet — waiting for the
    *  current (non-blocking, auto-fading) note to finish. Only used for a
    *  mid-phase miss-relocate and the heart phase's post-intro pickup;
@@ -342,8 +333,6 @@ export class GameEngine {
     this.tutorialMushrooms = []
     this.tutorialHeart = null
     this.tutorialMushroomWaveActive = false
-    this.tutorialHeartIntroDone = false
-    this.tutorialSuppressCastTime = 0
     this.tutorialStompLanded = false
     this.tutorialHitByMonster = false
     this.tutorialPendingPlacement = null
@@ -421,8 +410,6 @@ export class GameEngine {
     this.tutorialMushrooms = []
     this.tutorialHeart = null
     this.tutorialMushroomWaveActive = false
-    this.tutorialHeartIntroDone = false
-    this.tutorialSuppressCastTime = 0
     this.tutorialStompLanded = false
     this.tutorialHitByMonster = false
     this.tutorialWaitingForInput = true
@@ -445,10 +432,6 @@ export class GameEngine {
       this.beginTutorialPhase()
     }
     this.pressed = true
-    // The heart phase opens with a scripted fall — briefly suppressing
-    // casting here is what makes that fall actually happen instead of the
-    // player just hooking straight past it.
-    if (this.tutorialActive && this.tutorialSuppressCastTime > 0) return
     this.castHook()
   }
 
@@ -1222,10 +1205,6 @@ export class GameEngine {
     const p = this.player
     const phase = TUTORIAL_PHASES[this.tutorialPhaseIndex]
 
-    if (this.tutorialSuppressCastTime > 0) {
-      this.tutorialSuppressCastTime = Math.max(0, this.tutorialSuppressCastTime - dt)
-    }
-
     if (this.tutorialHintTimer > 0) {
       this.tutorialHintTimer = Math.max(0, this.tutorialHintTimer - dt)
       if (this.tutorialHintTimer === 0) {
@@ -1306,9 +1285,12 @@ export class GameEngine {
         if (this.tutorialMushroomWaveActive) {
           // Landing/hit ambiguity doesn't apply here — while invincible,
           // every collision resolves through smashMonster(), never a real
-          // hit, so a plain dead-count is unambiguous.
+          // hit, so a plain dead-count is unambiguous. Hand off once the
+          // target's met OR invincibility simply runs out — whichever
+          // comes first — so running low on time can never strand the
+          // player mid-wave waiting for a count that won't arrive in time.
           const smashed = this.tutorialMonsters.reduce((n, m) => n + (m.dead ? 1 : 0), 0)
-          if (smashed >= TUTORIAL_MUSHROOM_SMASH_TARGET) {
+          if (smashed >= TUTORIAL_MUSHROOM_SMASH_TARGET || this.invincibleTime <= 0) {
             this.tutorialMushroomWaveActive = false
             this.advanceTutorialPhase(3, 'Awesome smashing!')
           }
@@ -1326,10 +1308,6 @@ export class GameEngine {
         break
       }
       case 'heart': {
-        // Before the scripted fall has actually happened, there's nothing
-        // to check yet — that fall (via the normal ground-save, undone as
-        // always by tutorialRevive()) is what drives this phase forward.
-        if (!this.tutorialHeartIntroDone) break
         const h = this.tutorialHeart
         if (h?.taken) {
           this.advanceTutorialPhase(4)
@@ -1396,7 +1374,7 @@ export class GameEngine {
     if (phase === 'stomp') {
       this.tutorialMonsters = []
       for (let i = 0; i < TUTORIAL_STOMP_MONSTER_COUNT; i++) {
-        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'bat'))
       }
     } else if (phase === 'mushroom') {
       this.tutorialMushrooms = []
@@ -1404,14 +1382,20 @@ export class GameEngine {
         this.tutorialMushrooms.push(this.world.placeMushroomAt(baseX + i * gap))
       }
     } else if (phase === 'heart') {
-      // A small guaranteed hop so there's always a real, visible fall to
-      // feel — not just an unnoticed settle if they happened to already be
-      // near the ground. Casting stays suppressed for a beat (see
-      // pressDown()) so they can't just hook straight past it.
-      this.releaseHook()
-      this.tutorialHeartIntroDone = false
-      this.tutorialSuppressCastTime = TUTORIAL_HEART_FALL_SUPPRESS_CAST
-      if (this.player.vy > -200) this.player.vy = -320
+      // An instant, honest demonstration of "a hit costs one heart" —
+      // docked right on the spot, no fall, nothing suppressed. The new
+      // baseline reflects the deficit itself, so the general heart-loss
+      // safety net (see updateTutorial()) doesn't immediately undo it —
+      // the whole point is to leave something for the pickup to heal.
+      if (this.hearts > 1) this.hearts -= 1
+      this.tutorialSafeHearts = this.hearts
+      this.flash = 0.35
+      this.flashColor = '#ff7a6b'
+      this.shake = Math.max(this.shake, 12)
+      this.particles.popup(this.player.x, this.player.y - 60, '-1', '#ff8b8b', true, 32)
+      audio.hurt()
+      this.tutorialPendingPlacement = 'heart'
+      this.showTutorialHint(TUTORIAL_HEART_FALL_TEXT, TUTORIAL_HINT_DURATION, TUTORIAL_HEART_COLLECT_TEXT, TUTORIAL_HINT_DURATION)
     }
     this.publishHud(true)
   }
@@ -1428,7 +1412,7 @@ export class GameEngine {
     const gap = TUTORIAL_MUSHROOM_WAVE_GAP_METERS * PX_PER_METER
     this.tutorialMonsters = []
     for (let i = 0; i < TUTORIAL_MUSHROOM_WAVE_COUNT; i++) {
-      this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+      this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'bat'))
     }
     this.showTutorialHint(TUTORIAL_MUSHROOM_SMASH_TEXT)
   }
@@ -1454,7 +1438,7 @@ export class GameEngine {
     if (phase === 'stomp') {
       this.tutorialMonsters = []
       for (let i = 0; i < TUTORIAL_STOMP_MONSTER_COUNT; i++) {
-        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'slime'))
+        this.tutorialMonsters.push(this.world.placeMonsterAt(baseX + i * gap, 'bat'))
       }
     } else if (phase === 'mushroom') {
       this.tutorialMushrooms = []
@@ -1482,16 +1466,14 @@ export class GameEngine {
   /** Quietly undoes whatever just cost a heart and lets the player keep
    *  going from exactly where they are — the "unlimited attempts, never
    *  sent back" behaviour for getting hit or hitting the ground hard. The
-   *  "Ouch, you got hit" note only ever reappears when tutorialHitByMonster
-   *  says this heart loss actually was a hit — an unrelated hard landing
-   *  (or one that happens while a target is still mid-spawn, waiting on an
-   *  earlier note to fade) undoes the heart just the same but stays quiet,
-   *  so it can never masquerade as "the monster got you" and can never
-   *  keep re-arming (and thus indefinitely postponing) a note that's
-   *  simply waiting to finish its own hold time. The heart phase's very
-   *  first heart loss is different again — it's the scripted fall that
-   *  phase opens with (see beginTutorialPhase()), so THIS is the one
-   *  moment a plain ground landing is itself the lesson. */
+   *  "Ouch, that monster hit you" note (TUTORIAL_HIT_INSTRUCTIONS) only
+   *  ever reappears when tutorialHitByMonster says this heart loss
+   *  actually was a hit — an unrelated hard landing (or one that happens
+   *  while a target is still mid-spawn, waiting on an earlier note to
+   *  fade) undoes the heart just the same but stays quiet, so it can
+   *  never masquerade as "the monster got you" and can never keep
+   *  re-arming (and thus indefinitely postponing) a note that's simply
+   *  waiting to finish its own hold time. */
   private tutorialRevive() {
     const p = this.player
     this.tutorialUndoHeartLoss()
@@ -1523,17 +1505,9 @@ export class GameEngine {
     this.particles.popup(p.x, p.y - 60, 'Try again!', '#ffb347', true, 26)
     audio.uiClick()
 
-    if (phase === 'heart' && !this.tutorialHeartIntroDone) {
-      // Chains straight into "now go grab one" — the pickup itself only
-      // spawns once that whole sequence has faded (see
-      // spawnPendingTutorialTarget()), so it can't distract from either
-      // note while they're still making their point.
-      this.tutorialHeartIntroDone = true
-      this.tutorialPendingPlacement = 'heart'
-      this.showTutorialHint(TUTORIAL_HEART_FALL_TEXT, TUTORIAL_HINT_DURATION, TUTORIAL_HEART_COLLECT_TEXT, TUTORIAL_HINT_DURATION)
-    } else if (hitByMonster) {
-      const retryText = TUTORIAL_RETRY_INSTRUCTIONS[phase]
-      if (retryText) this.showTutorialHint(retryText)
+    if (hitByMonster) {
+      const hitText = TUTORIAL_HIT_INSTRUCTIONS[phase]
+      if (hitText) this.showTutorialHint(hitText)
     }
 
     this.publishHud(true)
@@ -1551,9 +1525,10 @@ export class GameEngine {
     audio.groundBounce()
 
     // Falling with nothing hooked during the swing phase is exactly the
-    // thing that note is teaching — bring it back if it had faded.
+    // thing that note is teaching — bring it back if it had faded. Its own
+    // wording (TUTORIAL_FALL_TEXT), never shared with a miss or a hit.
     if (TUTORIAL_PHASES[this.tutorialPhaseIndex] === 'swing') {
-      this.showTutorialHint(TUTORIAL_RETRY_INSTRUCTIONS.swing ?? TUTORIAL_INSTRUCTIONS.swing)
+      this.showTutorialHint(TUTORIAL_FALL_TEXT)
     }
   }
 
@@ -1564,9 +1539,10 @@ export class GameEngine {
    *  whatever chunk it was originally generated into; just moving its x
    *  can walk it out of every chunk the camera will ever ask for again
    *  (or into one already pruned), silently stranding it — invisible,
-   *  uncollidable, and the phase stuck forever waiting on it. The retry
-   *  note shows immediately; the replacement itself waits for that note to
-   *  fade, same as any other spawn (see spawnPendingTutorialTarget()). */
+   *  uncollidable, and the phase stuck forever waiting on it. The miss
+   *  note (TUTORIAL_MISS_INSTRUCTIONS — never the hit one) shows
+   *  immediately; the replacement itself waits for that note to fade,
+   *  same as any other spawn (see spawnPendingTutorialTarget()). */
   private relocateTutorialTarget(kind: 'monster' | 'mushroom' | 'heart') {
     if (kind === 'monster') this.tutorialMonsters = []
     else if (kind === 'mushroom') this.tutorialMushrooms = []
@@ -1574,8 +1550,8 @@ export class GameEngine {
 
     this.tutorialPendingPlacement = TUTORIAL_PHASES[this.tutorialPhaseIndex]
 
-    const retryText = TUTORIAL_RETRY_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
-    if (retryText) this.showTutorialHint(retryText)
+    const missText = TUTORIAL_MISS_INSTRUCTIONS[TUTORIAL_PHASES[this.tutorialPhaseIndex]]
+    if (missText) this.showTutorialHint(missText)
   }
 
   /** Hands off to a normal, unscripted run: the world starts generating
@@ -1588,7 +1564,7 @@ export class GameEngine {
     this.tutorialHintText = ''
     this.tutorialHintTimer = 0
     this.tutorialHintNextText = ''
-    this.world.setTutorialMode(false)
+    this.world.setTutorialMode(false, this.camX)
     this.publishHud(true)
   }
 

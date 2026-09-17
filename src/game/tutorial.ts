@@ -1,5 +1,5 @@
 /**
- * Tutorial script v4 — five hands-on phases (swing / stomp / mushroom /
+ * Tutorial script v5 — five hands-on phases (swing / stomp / mushroom /
  * heart / done), each with a canvas-drawn handwritten instruction (no
  * arrow, no modal — just a note).
  *
@@ -12,6 +12,11 @@
  * for it — a miss or a hit just shows a brief, auto-fading retry note and
  * lets the player keep going without ever blocking them.
  *
+ * Every failure mode gets its OWN note, not a shared one: missing a
+ * target entirely (flying past it) reads differently from actually being
+ * hit by a monster, and both are worded for exactly what happened — see
+ * TUTORIAL_MISS_INSTRUCTIONS / TUTORIAL_HIT_INSTRUCTIONS / TUTORIAL_FALL_TEXT.
+ *
  * A phase never ends in failure, only success, and never rewinds the
  * player: a heart lost mid-phase (a hit, or a hard fall) is quietly undone
  * in place, and an overshot fixed target hops forward into reach — a
@@ -19,13 +24,14 @@
  *
  * Stomp and mushroom each spawn a small forgiving cluster (not just one
  * target) so a miss on the first still leaves another right behind it.
- * Landing the mushroom on top of that opens a short "smash wave" — a
- * run of monsters right on the path, free to punch through while
- * invincible, so the payoff is something to actually do, not just watch a
- * timer. The heart phase opens with a scripted fall (hook-casting is
- * briefly suppressed so the player can't dodge it) so "a hit costs one
- * heart" is something they just felt, not just read, before the pickup
- * that heals it back ever appears.
+ * Landing the mushroom opens a short "smash wave" — a run of monsters
+ * right on the path, free to punch through while invincible — so the
+ * payoff is something to actually do; it hands off to the heart phase
+ * once either the smash target is met OR invincibility simply runs out,
+ * so it can never strand the player mid-wave. The heart phase opens by
+ * docking one heart on the spot (no fall, no suppressed input — just an
+ * instant, honest "here's what a hit costs") before the pickup that heals
+ * it back ever appears.
  */
 export type TutorialPhase = 'swing' | 'stomp' | 'mushroom' | 'heart' | 'done'
 
@@ -39,18 +45,28 @@ export const TUTORIAL_INSTRUCTIONS: Readonly<Record<TutorialPhase, string>> = {
   done: "You've got it — good luck out there!",
 }
 
-/** Shown instead of TUTORIAL_INSTRUCTIONS when the note reappears after a
- *  failed attempt at the same phase. The stomp one is only ever shown for
- *  an actual hit from the monster (see tutorialHitByMonster) — never for
- *  an unrelated heart loss, like a hard ground landing, that just happens
- *  to land during the same phase. The swing one is shown only for an
- *  actual fall to the ground (see tutorialGroundBounce) — the one place a
- *  ground touch itself is the thing being taught. */
-export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
-  swing: 'Oops, you touched the ground! Hold again to hook the next lantern.',
-  stomp: 'Ouch! You got hit by the monster. Try again to stomp on the monster!',
+/** Shown only for the swing phase's own ground-fumble (see
+ *  tutorialGroundBounce()) — the one place a plain ground touch is itself
+ *  the thing being taught, so it gets its own wording rather than sharing
+ *  either of the two below. */
+export const TUTORIAL_FALL_TEXT = 'Oops, you touched the ground! Hold again to hook the next lantern.'
+
+/** Shown when a fixed target (stomp cluster / mushroom cluster / heart
+ *  pickup) gets flown straight past without ever being reached — a MISS,
+ *  not a hit, so it reads as "you overshot it," never "ouch." */
+export const TUTORIAL_MISS_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
+  stomp: 'You flew right past it! Line up above the next one and land on top.',
   mushroom: 'Missed it — grab the next mushroom!',
   heart: 'Missed it — grab the next heart to heal up!',
+}
+
+/** Shown only when tutorialHitByMonster confirms a real hit actually
+ *  landed on the player — never for an unrelated heart loss (a hard
+ *  ground landing, say) that just happens to land during the same phase,
+ *  and never for a plain miss either (see TUTORIAL_MISS_INSTRUCTIONS). */
+export const TUTORIAL_HIT_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase, string>>> = {
+  stomp: 'Ouch! That monster hit you. Land on TOP of the next one to stomp it instead.',
+  mushroom: "Ouch! That one got you — smash through the rest while you're still invincible.",
 }
 
 /** Shown once, right after the mushroom is grabbed — invincibility is
@@ -59,12 +75,12 @@ export const TUTORIAL_RETRY_INSTRUCTIONS: Readonly<Partial<Record<TutorialPhase,
  *  about). */
 export const TUTORIAL_MUSHROOM_SMASH_TEXT = "You're invincible — smash through them all!"
 
-/** The heart phase's scripted intro: a note shown the instant the guided
- *  fall costs (and immediately un-costs) its one heart, pointing the
- *  player at the HUD before any pickup exists to distract from it. Chains
+/** The heart phase's scripted intro: shown the instant beginTutorialPhase()
+ *  docks one heart on the spot — no fall, nothing suppressed, just an
+ *  honest "here's what that costs" before pointing at the HUD. Chains
  *  automatically into TUTORIAL_HEART_COLLECT_TEXT once it's had its say
- *  (see TUTORIAL_HINT_DURATION) — the pickup itself only spawns once that
- *  whole sequence has faded. */
+ *  (see TUTORIAL_HINT_DURATION) — the healing pickup itself only spawns
+ *  once that whole sequence has faded. */
 export const TUTORIAL_HEART_FALL_TEXT = 'Ouch! A hit costs one heart — look at your hearts up top!'
 export const TUTORIAL_HEART_COLLECT_TEXT = 'Now grab the floating heart to heal it back!'
 
@@ -97,20 +113,16 @@ export const TUTORIAL_CLUSTER_GAP_METERS = 7
 export const TUTORIAL_MUSHROOM_WAVE_COUNT = 9
 
 /** How many of the wave actually need smashing before the mushroom phase
- *  hands off to the heart phase. */
+ *  hands off to the heart phase — though running out of invincibility
+ *  hands off regardless of the count reached (see updateTutorial()), so
+ *  this is a target to aim for, never something that can strand the
+ *  player mid-wave. */
 export const TUTORIAL_MUSHROOM_SMASH_TARGET = 7
 
 /** Spacing (metres) between consecutive members of the smash wave — tight
  *  enough that a straight run through the invincibility window reaches
  *  the target count comfortably. */
 export const TUTORIAL_MUSHROOM_WAVE_GAP_METERS = 5
-
-/** How long hook-casting is suppressed at the very start of the heart
- *  phase, forcing the scripted fall (see the file header) rather than
- *  leaving it to chance that the player happens to touch the ground on
- *  their own. Comfortably longer than a real fall takes from a standing
- *  jump, so it never lingers once the fall's already happened. */
-export const TUTORIAL_HEART_FALL_SUPPRESS_CAST = 2.5
 
 /** How far past a target (metres) counts as "missed it, relocate" — for a
  *  cluster, this means past every member of it. A missed cluster's

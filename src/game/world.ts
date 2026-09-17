@@ -72,13 +72,20 @@ export class World {
     for (let i = 0; i < CHUNKS_AHEAD + 1; i++) this.ensureChunk(i)
   }
 
-  /** Switches ambient generation back on for every chunk generated from
-   *  here on — used once the tutorial hands off to normal play. Chunks
-   *  already generated (a few ahead of the camera, per CHUNKS_AHEAD) stay
-   *  exactly as they were; only genuinely new ground follows normal
-   *  density from this point. */
-  setTutorialMode(on: boolean) {
+  /** Switches ambient generation back on — used once the tutorial hands
+   *  off to normal play. Also regenerates every chunk from the camera's
+   *  current position onward: several chunks are always pre-built ahead
+   *  of the camera (see CHUNKS_AHEAD), so without this the player would
+   *  have to fly clean through all of that already-generated, still-empty
+   *  ground — tens of metres of visibly "nothing" — before ever reaching a
+   *  chunk actually built under normal rules. Chunks already behind the
+   *  camera are left alone; nothing there is still reachable anyway. */
+  setTutorialMode(on: boolean, camX = 0) {
     this.tutorialMode = on
+    const first = Math.floor(camX / CHUNK_WIDTH)
+    for (const key of Array.from(this.chunks.keys())) {
+      if (key >= first) this.chunks.delete(key)
+    }
   }
 
   /** Generate everything the camera can reach and prune what it cannot. */

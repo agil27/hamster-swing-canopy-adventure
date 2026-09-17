@@ -1,17 +1,29 @@
 import { VIEW_W } from '../constants'
-import { TUTORIAL_HINT_FADE, TUTORIAL_INSTRUCTIONS, TUTORIAL_RETRY_INSTRUCTIONS } from '../tutorial'
+import {
+  TUTORIAL_FALL_TEXT,
+  TUTORIAL_HEART_COLLECT_TEXT,
+  TUTORIAL_HEART_FALL_TEXT,
+  TUTORIAL_HINT_FADE,
+  TUTORIAL_HIT_INSTRUCTIONS,
+  TUTORIAL_INSTRUCTIONS,
+  TUTORIAL_MISS_INSTRUCTIONS,
+} from '../tutorial'
 import type { GameEngine } from '../engine'
 
 const INK = '#7a3a1e'
 const PAPER = 'rgba(255,250,235,0.95)'
 const CELEBRATE_INK = '#2c6b3c'
 
-// Any instruction/retry copy renders as a plain handwritten note; anything
-// else showing (a "Nice!"/"Invincible!" acknowledgement) gets the
+// Any instruction/miss/hit/fall copy renders as a plain handwritten note;
+// anything else showing (a "Nice!"/"Invincible!" acknowledgement) gets the
 // celebratory treatment instead.
 const INSTRUCTION_TEXTS = new Set<string>([
   ...Object.values(TUTORIAL_INSTRUCTIONS),
-  ...Object.values(TUTORIAL_RETRY_INSTRUCTIONS),
+  ...Object.values(TUTORIAL_MISS_INSTRUCTIONS),
+  ...Object.values(TUTORIAL_HIT_INSTRUCTIONS),
+  TUTORIAL_FALL_TEXT,
+  TUTORIAL_HEART_FALL_TEXT,
+  TUTORIAL_HEART_COLLECT_TEXT,
 ])
 
 /**
