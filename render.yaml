@@ -17,11 +17,12 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
-    # No persistent disk on the free plan — DB_PATH is left unset, so
-    # server/db.js falls back to a path inside the app's own (ephemeral)
-    # filesystem. That means accounts/scores reset on every deploy AND
-    # every time the free instance spins back up after going idle (~15
-    # min of inactivity puts it to sleep; the next request wakes it into a
-    # fresh container). Accepted tradeoff for staying free — see the
-    # README/.env.example if this ever needs to become durable, which
-    # just means adding a paid plan + disk and setting DB_PATH to it.
+      # Free Turso database — see server/db.js. Without these, the server
+      # falls back to a local SQLite file on Render's own ephemeral disk,
+      # which resets on every deploy/spin-down. Get both from
+      # https://turso.tech (free tier, no card): `turso db create hamswing`
+      # then `turso db show hamswing --url` and `turso db tokens create hamswing`.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

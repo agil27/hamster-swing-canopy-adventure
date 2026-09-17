@@ -1,11 +1,11 @@
 // The whole backend: serves the built frontend and the small JSON API it
 // talks to (Google sign-in, display name, leaderboard). One process, one
-// SQLite file — see db.js for why.
+// libSQL/Turso database — see db.js for why.
 import 'dotenv/config'
 import path from 'node:path'
 import express from 'express'
 import cookieParser from 'cookie-parser'
-import { statements } from './db.js'
+import { db, initSchema } from './db.js'
 import { verifyGoogleIdToken, signSession, setSessionCookie, clearSessionCookie, readSession, requireAuth } from './auth.js'
 
 const app = express()
@@ -38,16 +38,16 @@ app.post('/api/auth/google', async (req, res) => {
   }
 
   const now = Date.now()
-  statements.upsertUser.run({ id: profile.id, name: profile.name.slice(0, MAX_NAME_LENGTH), email: profile.email, picture: profile.picture, now })
-  const user = statements.getUser.get(profile.id)
+  await db.upsertUser({ id: profile.id, name: profile.name.slice(0, MAX_NAME_LENGTH), email: profile.email, picture: profile.picture, now })
+  const user = await db.getUser(profile.id)
 
   setSessionCookie(res, signSession(user.id))
   res.json({ user: { id: user.id, name: user.name, picture: user.picture } })
 })
 
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   if (!req.userId) return res.json({ user: null })
-  const user = statements.getUser.get(req.userId)
+  const user = await db.getUser(req.userId)
   if (!user) return res.json({ user: null })
   res.json({ user: { id: user.id, name: user.name, picture: user.picture } })
 })
@@ -57,30 +57,30 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ ok: true })
 })
 
-app.put('/api/auth/name', requireAuth, (req, res) => {
+app.put('/api/auth/name', requireAuth, async (req, res) => {
   const raw = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
   if (!raw) return res.status(400).json({ error: 'Name cannot be empty' })
   const name = raw.slice(0, MAX_NAME_LENGTH)
-  statements.renameUser.run(name, req.userId)
+  await db.renameUser(name, req.userId)
   res.json({ user: { id: req.userId, name } })
 })
 
 // --- leaderboard -------------------------------------------------------------
 
-app.post('/api/scores', requireAuth, (req, res) => {
+app.post('/api/scores', requireAuth, async (req, res) => {
   const score = Math.round(Number(req.body?.score))
   const distance = Number(req.body?.distance) || 0
   if (!Number.isFinite(score) || score < 0 || score > MAX_PLAUSIBLE_SCORE) {
     return res.status(400).json({ error: 'Invalid score' })
   }
-  const before = statements.getBestScore.get(req.userId)
-  statements.upsertScore.run({ userId: req.userId, score, distance, now: Date.now() })
+  const before = await db.getBestScore(req.userId)
+  await db.upsertScore({ userId: req.userId, score, distance, now: Date.now() })
   const isNewBest = !before || score > before.best_score
   res.json({ ok: true, isNewBest, bestScore: isNewBest ? score : before.best_score })
 })
 
-app.get('/api/leaderboard', (_req, res) => {
-  const rows = statements.topScores.all(LEADERBOARD_LIMIT)
+app.get('/api/leaderboard', async (_req, res) => {
+  const rows = await db.topScores(LEADERBOARD_LIMIT)
   res.json({ entries: rows.map((r) => ({ name: r.name, picture: r.picture, score: r.score, distance: r.distance })) })
 })
 
@@ -96,7 +96,22 @@ app.use((req, res, next) => {
   res.sendFile(path.join(DIST_DIR, 'index.html'))
 })
 
-const port = process.env.PORT || 3000
-app.listen(port, () => {
-  console.log(`hamswing server listening on :${port}`)
+// Express 5 forwards a rejected promise from any async handler above
+// straight here — keep the response JSON instead of Express's default
+// HTML error page.
+app.use((err, _req, res, _next) => {
+  console.error('[server]', err)
+  res.status(500).json({ error: 'Internal server error' })
 })
+
+const port = process.env.PORT || 3000
+initSchema()
+  .then(() => {
+    app.listen(port, () => {
+      console.log(`hamswing server listening on :${port}`)
+    })
+  })
+  .catch((err) => {
+    console.error('[server] failed to initialize the database:', err)
+    process.exit(1)
+  })
