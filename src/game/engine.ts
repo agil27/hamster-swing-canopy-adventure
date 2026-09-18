@@ -190,6 +190,12 @@ export class GameEngine {
   score = 0
   distance = 0
   private scoredMeters = 0
+  /** The x position "distance" is measured from — normally PLAYER_START_X
+   *  for the whole run, but the tutorial moves this up to wherever the
+   *  player actually is the moment it hands off to normal play (see
+   *  finishTutorial()), so practice never counts toward distance, score,
+   *  or the leaderboard. */
+  private distanceBaselineX = PLAYER_START_X
   hearts = MAX_HEARTS
   combo = 1
   comboCount = 0
@@ -357,6 +363,7 @@ export class GameEngine {
     this.score = 0
     this.distance = 0
     this.scoredMeters = 0
+    this.distanceBaselineX = PLAYER_START_X
     this.hearts = MAX_HEARTS
     this.combo = 1
     this.comboCount = 0
@@ -584,7 +591,7 @@ export class GameEngine {
     this.updateCosmetics(dt)
 
     // --- distance & scoring -------------------------------------------------
-    const meters = Math.max(0, (p.x - PLAYER_START_X) / PX_PER_METER)
+    const meters = Math.max(0, (p.x - this.distanceBaselineX) / PX_PER_METER)
     if (meters > this.distance) this.distance = meters
     const wholeMeters = Math.floor(this.distance)
     if (wholeMeters > this.scoredMeters) {
@@ -1102,11 +1109,14 @@ export class GameEngine {
     this.shake = Math.max(this.shake, 16)
     audio.stomp()
 
-    // A clean stomp heals one heart back — a real (non-tutorial) reward
-    // for playing well, on top of the score. Tutorial practice stays
-    // exactly as it was; hearts there are governed entirely by
-    // tutorialSafeHearts/tutorialRevive.
-    if (!this.tutorialActive && this.hearts < MAX_HEARTS) {
+    // A clean stomp heals one heart back — active in the tutorial too (the
+    // player should feel the same reward there), it just doesn't disturb
+    // the guided phases: tutorialSafeHearts/tutorialStompLanded are keyed
+    // off this.hearts, and healing only ever moves hearts *up*, so the
+    // "did we lose a heart?" checks those phases rely on stay exactly as
+    // forgiving as before — this can only ever heal on top of that, never
+    // interfere with it.
+    if (this.hearts < MAX_HEARTS) {
       this.hearts++
       this.heartsFlashId++
       this.particles.popup(m.x, m.y - 56, '+1 HEART', '#ff8fa8', true, 28)
@@ -1578,6 +1588,22 @@ export class GameEngine {
     this.tutorialHintTimer = 0
     this.tutorialHintNextText = ''
     this.world.setTutorialMode(false, this.camX)
+
+    // Practice shouldn't count toward the leaderboard or the player's own
+    // best — zero every run stat right here, at the exact position the
+    // player's already at, so normal play starts its scoring from a clean
+    // slate without any visible rewind or hitch.
+    this.distanceBaselineX = this.player.x
+    this.score = 0
+    this.distance = 0
+    this.scoredMeters = 0
+    this.seedsCollected = 0
+    this.monstersStomped = 0
+    this.combo = 1
+    this.comboCount = 0
+    this.comboTimer = 0
+    this.bestCombo = 1
+
     this.publishHud(true)
   }
 

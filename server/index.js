@@ -73,10 +73,20 @@ app.post('/api/scores', requireAuth, async (req, res) => {
   if (!Number.isFinite(score) || score < 0 || score > MAX_PLAUSIBLE_SCORE) {
     return res.status(400).json({ error: 'Invalid score' })
   }
-  const before = await db.getBestScore(req.userId)
-  await db.upsertScore({ userId: req.userId, score, distance, now: Date.now() })
-  const isNewBest = !before || score > before.best_score
-  res.json({ ok: true, isNewBest, bestScore: isNewBest ? score : before.best_score })
+  try {
+    const before = await db.getBestScore(req.userId)
+    await db.upsertScore({ userId: req.userId, score, distance, now: Date.now() })
+    const isNewBest = !before || score > before.best_score
+    res.json({ ok: true, isNewBest, bestScore: isNewBest ? score : before.best_score })
+  } catch (err) {
+    // The generic error middleware below would catch this too (Express 5
+    // forwards a rejected async-handler promise automatically) — this is
+    // just a clearer, route-specific log line, since "why did a score
+    // fail to save" is exactly the kind of thing worth being able to grep
+    // for directly.
+    console.error('[scores] failed to save', { userId: req.userId, score, distance }, err)
+    res.status(500).json({ error: 'Could not save score' })
+  }
 })
 
 app.get('/api/leaderboard', async (_req, res) => {

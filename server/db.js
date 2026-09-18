@@ -22,7 +22,11 @@ export const client = createClient(
     : { url: `file:${LOCAL_DB_PATH}` },
 )
 
-if (!TURSO_URL) console.warn('[db] TURSO_DATABASE_URL is not set — using a local SQLite file. Fine for dev, not for a real deploy.')
+if (TURSO_URL) {
+  console.log(`[db] using Turso database at ${TURSO_URL}`)
+} else {
+  console.warn('[db] TURSO_DATABASE_URL is not set — using a local SQLite file. Fine for dev, not for a real deploy.')
+}
 
 export async function initSchema() {
   await client.batch(
