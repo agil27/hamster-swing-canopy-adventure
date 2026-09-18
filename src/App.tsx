@@ -12,7 +12,7 @@ import { audio } from './game/audio'
 import { MUTE_KEY } from './game/constants'
 import { GameEngine } from './game/engine'
 import type { HudState } from './game/types'
-import { submitScore } from './lib/api'
+import { submitScoreWithRetries } from './lib/api'
 import { useAuth } from './lib/useAuth'
 
 function readMuted() {
@@ -76,27 +76,13 @@ export default function App() {
       return
     }
     setSaveStatus('saving')
-    const { score, distance } = hud
-    submitScore(score, distance)
+    // Retries internally (5 attempts, growing delay) — see its own comment
+    // for why: Render's free tier spins the instance down after ~15 min
+    // idle, and the first request after that can fail well before it ever
+    // reaches our server code.
+    submitScoreWithRetries(hud.score, hud.distance)
       .then(() => setSaveStatus('saved'))
-      .catch((err) => {
-        // Render's free tier spins the instance down after ~15 min idle —
-        // the very first request after that can time out or get refused
-        // while the container wakes back up, well before it ever reaches
-        // our server code (so there's nothing to see in the server's own
-        // logs for it). One short retry covers that transient case without
-        // the player ever needing to know; log both attempts either way so
-        // a *real* failure is actually visible in the browser console.
-        console.warn('[score] first save attempt failed, retrying once:', err)
-        setTimeout(() => {
-          submitScore(score, distance)
-            .then(() => setSaveStatus('saved'))
-            .catch((err2) => {
-              console.error('[score] save failed after retry:', err2)
-              setSaveStatus('error')
-            })
-        }, 2500)
-      })
+      .catch(() => setSaveStatus('error'))
   }, [hud, auth.user])
 
   useEffect(() => {
